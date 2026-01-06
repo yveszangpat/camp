@@ -1,0 +1,378 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum role {
+  TEACHER
+  CAMP_LEADER
+  ADMIN
+}
+
+model teachers {
+  teachers_id Int    @id @default(autoincrement())
+  role        role   @default(TEACHER)
+  firstname   String @db.VarChar(255)
+  lastname    String @db.VarChar(255)
+  tel         String @db.VarChar(10)
+  email       String @db.VarChar(255)
+
+  classrooms        classrooms[]
+  classroom_teacher classroom_teacher[]
+  camp              camp[]
+  teacher_enrollment teacher_enrollment[]
+}
+
+model students {
+  students_id     Int     @id
+  firstname       String  @db.VarChar(255)
+  lastname        String  @db.VarChar(255)
+  food_allergy    String? @db.VarChar(255)
+  chronic_disease String? @db.VarChar(255)
+  remark          String? @db.VarChar(255)
+  tel             String? @db.VarChar(10)
+  email           String  @db.VarChar(255) 
+
+  parents            parents[]
+  classroom_students classroom_students[]
+  student_enrollment student_enrollment[]
+}
+
+model parents {
+  parents_id Int    @id @default(autoincrement())
+  firstname  String @db.VarChar(255)
+  lastname   String @db.VarChar(255)
+  tel        String @db.VarChar(10)
+
+  Student_student_id Int
+  student            students @relation(fields: [Student_student_id], references: [students_id])
+}
+
+model academic_years {
+  years_id   Int          @id @default(autoincrement())
+  year       Int          @db.Year
+  classrooms classrooms[]
+}
+
+model classrooms {
+  classroom_id            Int            @id @default(autoincrement())
+  type_classroom          String         @db.VarChar(255)
+  grade                   GradeLevel
+  academic_years_years_id Int
+  academic_years          academic_years @relation(fields: [academic_years_years_id], references: [years_id])
+
+  teachers_teachers_id Int
+  teacher              teachers @relation(fields: [teachers_teachers_id], references: [teachers_id])
+
+  classroom_teacher  classroom_teacher[]
+  classroom_students classroom_students[]
+  camp_classroom camp_classroom[]
+}
+
+enum GradeLevel {
+  Level_1 @map("1")
+  Level_2 @map("2")
+  Level_3 @map("3")
+  Level_4 @map("4")
+  Level_5 @map("5")
+  Level_6 @map("6")
+}
+
+model classroom_teacher {
+  classroom_teacher_id   Int @id @default(autoincrement())
+  classroom_classroom_id Int
+  teacher_teachers_id    Int
+
+  classroom classrooms @relation(fields: [classroom_classroom_id], references: [classroom_id])
+  teacher   teachers   @relation(fields: [teacher_teachers_id], references: [teachers_id])
+}
+
+model classroom_students {
+  classroom_students_id  Int @id @default(autoincrement())
+  classroom_classroom_id Int
+  student_students_id    Int
+
+  classroom classrooms @relation(fields: [classroom_classroom_id], references: [classroom_id])
+  student   students   @relation(fields: [student_students_id], references: [students_id])
+}
+
+model camp {
+  camp_id          Int      @id @default(autoincrement())
+  location         String   @db.VarChar(255)
+  name             String   @db.VarChar(255)
+  start_date       DateTime
+  end_date         DateTime
+  start_shirt_date DateTime
+  end_shirt_date   DateTime
+  start_regis_date DateTime
+  end_regis_date   DateTime
+  description      String   @db.Text
+  status camp_status @default(OPEN)
+  has_shirt       Boolean  @default(false)
+
+  plan_type_plane_id Int
+  plan_type          plan_type @relation(fields: [plan_type_plane_id], references: [plane_id])
+
+  created_by_teacher_id Int
+  created_by            teachers @relation(fields: [created_by_teacher_id], references: [teachers_id])
+
+  camp_template camp_template[]
+  camp_classroom camp_classroom[]
+  teacher_enrollment teacher_enrollment[]
+  student_enrollment student_enrollment[]
+  attendance_teachers attendance_teachers[]
+  station station[]
+  evaluation evaluation[]
+}
+
+enum camp_status {
+  OPEN
+  CLOSED
+}
+
+model plan_type {
+  plane_id Int    @id @default(autoincrement())
+  name         plan_type_
+  camp         camp[]
+}
+
+enum plan_type_ {
+  new
+  continue
+}
+
+model camp_template {
+  camp_template_id Int    @id @default(autoincrement())
+  name             String @db.VarChar(255)
+
+  camp_camp_id Int
+  camp         camp   @relation(fields: [camp_camp_id], references: [camp_id])
+  
+}
+
+model camp_classroom {
+  camp_classroom_id   Int @id @default(autoincrement())
+  camp_camp_id        Int
+  classroom_classroom_id Int
+
+  camp      camp      @relation(fields: [camp_camp_id], references: [camp_id])
+  classroom classrooms @relation(fields: [classroom_classroom_id], references: [classroom_id])
+} 
+
+model teacher_enrollment {
+  teacher_enrollment_id Int    @id @default(autoincrement())
+  
+  teacher_teachers_id Int
+  teacher teachers @relation(fields: [teacher_teachers_id], references: [teachers_id])
+  camp_camp_id Int
+  camp camp @relation(fields: [camp_camp_id], references: [camp_id])
+  attendance_teachers attendance_teachers[]
+}
+
+model student_enrollment {
+  student_enrollment_id Int    @id @default(autoincrement())
+  enrolled_at DateTime @default(now())
+  shirt_size String @db.VarChar(10)
+  
+  student_students_id Int
+  student students @relation(fields: [student_students_id], references: [students_id])
+  camp_camp_id Int
+  camp camp @relation(fields: [camp_camp_id], references: [camp_id])
+  certificate certificate[]
+  mission_result mission_result[] 
+  evaluation evaluation[]
+}
+model attendance_record_student {
+  record_id Int    @id @default(autoincrement())
+  checkin_time DateTime
+  attendance_teacher_session_id Int
+  
+  attendance_teachers_session_id attendance_teachers @relation(fields: [attendance_teacher_session_id], references: [session_id])
+}
+
+model attendance_teachers {
+  session_id Int    @id @default(autoincrement())
+  description String @db.Text
+  methed attendance_teachers_methed
+  created_at DateTime @default(now())
+  camp_camp_id Int
+  camp camp @relation(fields: [camp_camp_id], references: [camp_id])
+  teacher_enrollment_teacher_enrollment_id Int
+  teacher_enrollment teacher_enrollment @relation(fields: [teacher_enrollment_teacher_enrollment_id], references: [teacher_enrollment_id])
+
+  attendance_record_student attendance_record_student[]
+}
+
+enum attendance_teachers_methed {
+  QR
+  NFC
+  default
+}
+
+model certificate {
+  certificate_id Int    @id @default(autoincrement())
+  issue_date DateTime @default(now())
+  file_url String @db.VarChar(255)
+  certificate_no Int
+  certificate_no_star Int
+  student_enrollment_id Int
+  student_enrollment student_enrollment @relation(fields: [student_enrollment_id], references: [student_enrollment_id])
+}
+
+model station {
+  station_id Int    @id @default(autoincrement())
+  name String @db.VarChar(255)
+  description String @db.VarChar(255)
+
+  camp_camp_id Int
+  camp camp @relation(fields: [camp_camp_id], references: [camp_id])
+
+  mission mission[]
+}
+
+model mission {
+  mission_id Int    @id @default(autoincrement())
+  description String @db.VarChar(255)
+
+  station_station_id Int
+  station station @relation(fields: [station_station_id], references: [station_id])
+
+  mission_result mission_result[]
+  mission_question mission_question[]
+}
+
+model mission_result {
+  mission_result_id Int    @id @default(autoincrement())
+  mothod mission_result_method
+  status mission_result_status
+  submitted_at DateTime @default(now())
+
+  student_enrollment_id Int 
+  student_enrollment student_enrollment @relation(fields: [student_enrollment_id], references: [student_enrollment_id])
+  mission_mission_id Int
+  mission mission @relation(fields: [mission_mission_id], references: [mission_id])
+
+  mission_answer mission_answer[]
+}
+
+enum mission_result_method {
+  NFC
+  QR
+  Code
+  Aws
+  Photo
+}
+
+enum mission_result_status {
+  pending
+  comple
+  completed
+}
+
+model mission_question {
+  question_id Int    @id @default(autoincrement())
+  question_text String @db.VarChar(255)
+  question_type mission_question_type
+
+  mission_mission_id Int
+  mission mission @relation(fields: [mission_mission_id], references: [mission_id])
+  mission_answer mission_answer[]
+}
+
+enum mission_question_type {
+  MCQ
+  TEXT
+}
+
+model question_mcq_detail {
+  question_mcq_detail_id Int    @id @default(autoincrement()) 
+  choice_a String @db.VarChar(255)
+  choice_b String @db.VarChar(255)
+  choice_c String @db.VarChar(255)
+  choice_d String @db.VarChar(255)
+  correct_choice String @db.VarChar(1)
+}
+
+model mission_answer {
+  answer_id Int    @id @default(autoincrement())
+  mission_result_mission_result_id Int
+  mission_result mission_result @relation(fields: [mission_result_mission_result_id], references: [mission_result_id])
+  mission_question_question_id Int 
+  mission_question mission_question @relation(fields: [mission_question_question_id], references: [question_id])
+}
+
+model answer_mcq{
+  mission_answer_id Int @id @default(autoincrement())
+  question_text String @db.VarChar(1)
+}
+
+model answer_text{
+  mission_answer_id Int @id @default(autoincrement())
+  answer_text String @db.Text
+}
+
+model evaluation {
+  evaluation_id Int    @id @default(autoincrement())
+  submitted_at DateTime @default(now())
+  status evaluation_status
+
+  student_enrollment_id Int 
+  student_enrollment student_enrollment @relation(fields: [student_enrollment_id], references: [student_enrollment_id])
+  camp_camp_id Int
+  camp camp @relation(fields: [camp_camp_id], references: [camp_id])
+
+  evaluation_answer evaluation_answer[]
+}
+
+enum evaluation_status {
+  pending
+  completed
+}
+
+model evaluation_question {
+  question_id Int    @id @default(autoincrement())
+  question_text String @db.VarChar(255)
+  question_type evaluation_question_type
+  scale_max Int?
+  evaluation_answer evaluation_answer[]
+}
+
+enum evaluation_question_type {
+  scale
+  text
+}
+
+model evaluation_answer {
+  answer_id Int    @id @default(autoincrement())
+  scale_value Int?
+  text_answer String? @db.Text
+
+  evaluation_evaluation_id Int
+  evaluation evaluation @relation(fields: [evaluation_evaluation_id], references: [evaluation_id])
+  evaluation_question_question_id Int 
+  evaluation_question evaluation_question @relation(fields: [evaluation_question_question_id], references: [question_id])
+
+  suggestion_analysis_summary suggestion_analysis_summary[]
+}
+
+model suggestion_analysis_summary {
+  suggestion_analysis_summary_id Int    @id @default(autoincrement())
+  summary_text String @db.Text
+  overall_sentiment String @db.VarChar(255)
+  positive_themes String @db.Text
+  improvement_areas String @db.Text
+  positive_percentage Float
+  negative_percentage Float
+  evaluation_answer_evaluation_id Int
+  evaluation_answer evaluation_answer @relation(fields: [evaluation_answer_evaluation_id], references: [answer_id])
+}
