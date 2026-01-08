@@ -89,7 +89,7 @@ export default function StudentDashboard() {
     );
 
     return (
-        <div className="min-h-screen bg-[#faf9f6]">
+        <div className="min-h-screen bg-[#F5F1E8]">
             <div className="max-w-7xl mx-auto px-4 py-8">
                 {/* Header */}
                 <div className="mb-8">
@@ -110,7 +110,7 @@ export default function StudentDashboard() {
                         classNames={{
                             base: "w-full",
                             tabList:
-                                "w-full bg-[#f5f0e7] rounded-full p-1 flex overflow-x-auto md:overflow-visible scrollbar-hide",
+                                "w-full bg-[#EBE7DD] rounded-full p-1 flex overflow-x-auto md:overflow-visible scrollbar-hide",
                             tab:
                                 "flex-1 px-6 py-3 whitespace-nowrap flex-shrink-0 md:flex-1 justify-center",
                             cursor: "rounded-full",

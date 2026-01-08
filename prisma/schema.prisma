@@ -133,6 +133,7 @@ model camp {
   attendance_teachers attendance_teachers[]
   station station[]
   evaluation evaluation[]
+  camp_daily_schedule camp_daily_schedule[]
 }
 
 enum camp_status {
@@ -149,6 +150,28 @@ model plan_type {
 enum plan_type_ {
   new
   continue
+}
+
+model camp_daily_schedule {
+  daily_schedule_id Int @id @default(autoincrement())
+
+  camp_camp_id Int
+  camp camp @relation(fields: [camp_camp_id], references: [camp_id])
+
+  day Int
+
+  time_slots camp_time_slot[]
+}
+
+model camp_time_slot {
+  time_slot_id Int @id @default(autoincrement())
+
+  daily_schedule_id Int
+  daily_schedule camp_daily_schedule @relation(fields: [daily_schedule_id], references: [daily_schedule_id])
+
+  startTime String @db.VarChar(5)
+  endTime   String @db.VarChar(5)
+  activity  String @db.VarChar(255)
 }
 
 model camp_template {
