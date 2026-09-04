@@ -1,60 +1,12 @@
-import fs from "fs";
-import path from "path";
+import type { CertificateRenderManifest } from "@/lib/certificate-renderer";
 
 import { NextResponse } from "next/server";
-import { PDFDocument, rgb } from "pdf-lib";
-import fontkit from "@pdf-lib/fontkit";
-import { ImageResponse } from "next/og";
-import * as QRCode from "qrcode";
-import React from "react";
 
 import { prisma } from "@/lib/db";
 import { requireStudent } from "@/lib/auth";
 import { getCertificateEligibility } from "@/lib/certificate-eligibility";
 import { activeCampStudentWhere } from "@/lib/active-camp-student";
 import { buildCertificateVerificationUrl } from "@/lib/certificate-verification";
-
-// Cache Font ไว้ใน Memory เพื่อไม่ต้องอ่านไฟล์ใหม่ทุกครั้งที่กดโหลด
-let cachedFontBytes: Buffer | null = null;
-
-function getFontBytes(): Buffer {
-  if (!cachedFontBytes) {
-    const fontPath = path.join(process.cwd(), "public/fonts/THSarabunNew.ttf");
-
-    cachedFontBytes = fs.readFileSync(fontPath);
-  }
-
-  return cachedFontBytes;
-}
-
-// Cache Template Image ไว้ใน Memory โดยใช้ URL เป็น key
-// - URL เดิม → ใช้ buffer เดิมทันที ไม่ fetch Cloudinary ซ้ำ
-// - Admin อัปโหลดใหม่ → URL เปลี่ยน → cache miss → fetch ใหม่อัตโนมัติ
-const templateCache = new Map<
-  string,
-  { buffer: ArrayBuffer; contentType: string }
->();
-
-async function fetchTemplate(
-  url: string,
-): Promise<{ buffer: ArrayBuffer; contentType: string }> {
-  const cached = templateCache.get(url);
-
-  if (cached) return cached;
-
-  const res = await fetch(url, { cache: "no-store" });
-
-  if (!res.ok) throw new Error(`Failed to fetch template: ${res.status}`);
-
-  const entry = {
-    buffer: await res.arrayBuffer(),
-    contentType: res.headers.get("content-type") || "",
-  };
-
-  templateCache.set(url, entry);
-
-  return entry;
-}
 
 // In-memory rate limiter to prevent rapid spam requests
 const rateLimitMap = new Map<string, { count: number; lastReset: number }>();
@@ -92,10 +44,6 @@ export async function GET(request: Request, context: any) {
 
   const params = await context.params;
   const campId = Number(params.id);
-  const { searchParams } = new URL(request.url);
-  const format = searchParams.get("format") || "pdf";
-  const isDownload = searchParams.get("download") === "true";
-  const disposition = isDownload ? "attachment" : "inline";
 
   if (isNaN(campId)) {
     return NextResponse.json({ error: "Invalid camp id" }, { status: 400 });
@@ -341,20 +289,8 @@ export async function GET(request: Request, context: any) {
         }
       }
     }
-
-    // Fetch the image (ใช้ cache — URL เดิมไม่ fetch Cloudinary ซ้ำ)
-    const { buffer: imageBuffer, contentType } = await fetchTemplate(
-      camp.img_certificate_url,
-    );
-
     const prefix = enrollment.student.prefix_name?.trim() || "";
     const fullName = `${prefix}${enrollment.student.firstname.trim()} ${enrollment.student.lastname.trim()}`;
-    const fontSize = camp.cert_font_size || 48;
-    const xPercent = camp.cert_name_x ?? 50;
-    const yPercent = camp.cert_name_y ?? 50;
-    const fontColorHex = camp.cert_font_color || "#000000";
-
-    // ข้อมูลเลขที่
     const showNumber = camp.cert_show_number && assignedCertNo != null;
     const numberText = showNumber
       ? buildCertNumberText(
@@ -364,20 +300,7 @@ export async function GET(request: Request, context: any) {
           camp.cert_year,
         )
       : null;
-    const numFontSize = camp.cert_number_size || 36;
-    const numXPercent = camp.cert_number_x ?? 50;
-    const numYPercent = camp.cert_number_y ?? 10;
-    const numColorHex = camp.cert_number_color || "#000000";
-
-    // คิวอาร์โค้ดแต่ละใบชี้ไปยังหน้าตรวจสอบสาธารณะที่เซ็นลายเซ็นไว้
-    // QR verification is only meaningful after the certificate has a number.
-    // Never emit a QR for an unnumbered certificate, even if old settings are
-    // inconsistent in the database.
     const showQr = camp.cert_show_qr && assignedCertNo != null;
-    const qrSize = camp.cert_qr_size || 140;
-    const qrXPercent = camp.cert_qr_x ?? 90;
-    const qrYPercent = camp.cert_qr_y ?? 88;
-
     const verificationUrl = showQr
       ? buildCertificateVerificationUrl(
           new URL(request.url).origin,
@@ -385,284 +308,8 @@ export async function GET(request: Request, context: any) {
         )
       : null;
 
-    if (format === "png") {
-      // First, get the image dimensions by parsing the image via pdf-lib
-      const tempPdfDoc = await PDFDocument.create();
-      let embeddedImage;
-
-      if (
-        contentType.includes("png") ||
-        camp.img_certificate_url.toLowerCase().endsWith(".png")
-      ) {
-        embeddedImage = await tempPdfDoc.embedPng(imageBuffer);
-      } else {
-        embeddedImage = await tempPdfDoc.embedJpg(imageBuffer);
-      }
-      const { width, height } = embeddedImage.scale(1);
-
-      let fontBytes;
-
-      try {
-        fontBytes = getFontBytes();
-      } catch (e) {
-        return NextResponse.json(
-          { error: "Font file not found on server." },
-          { status: 500 },
-        );
-      }
-
-      // Convert image buffer to base64 for reliable rendering in ImageResponse
-      const base64Image = `data:${contentType || "image/jpeg"};base64,${Buffer.from(imageBuffer).toString("base64")}`;
-      const qrDataUrl = verificationUrl
-        ? await QRCode.toDataURL(verificationUrl, {
-            errorCorrectionLevel: "M",
-            margin: 1,
-            width: Math.round(qrSize),
-          })
-        : null;
-
-      const imageResponse = new ImageResponse(
-        React.createElement(
-          "div",
-          {
-            style: {
-              display: "flex",
-              width: "100%",
-              height: "100%",
-              position: "relative",
-            },
-          },
-          React.createElement("img", {
-            src: base64Image,
-            style: {
-              position: "absolute",
-              top: 0,
-              left: 0,
-              width: "100%",
-              height: "100%",
-              objectFit: "cover",
-            },
-          }),
-          // ชื่อนักเรียน
-          React.createElement(
-            "div",
-            {
-              style: {
-                position: "absolute",
-                left: `${xPercent}%`,
-                top: `${yPercent}%`,
-                transform: "translate(-50%, -50%)",
-                display: "flex",
-                color: fontColorHex,
-                fontSize: fontSize,
-                fontFamily: '"THSarabunNew"',
-                whiteSpace: "nowrap",
-                alignItems: "center",
-                justifyContent: "center",
-              },
-            },
-            fullName,
-          ),
-          // เลขที่เกียรติบัตร (ถ้าเปิดใช้)
-          ...(showNumber && numberText
-            ? [
-                React.createElement(
-                  "div",
-                  {
-                    style: {
-                      position: "absolute",
-                      left: `${numXPercent}%`,
-                      top: `${numYPercent}%`,
-                      transform: "translate(-50%, -50%)",
-                      display: "flex",
-                      color: numColorHex,
-                      fontSize: numFontSize,
-                      fontFamily: '"THSarabunNew"',
-                      whiteSpace: "nowrap",
-                      alignItems: "center",
-                      justifyContent: "center",
-                    },
-                  },
-                  numberText,
-                ),
-              ]
-            : []),
-          ...(qrDataUrl
-            ? [
-                React.createElement("img", {
-                  src: qrDataUrl,
-                  alt: "",
-                  style: {
-                    position: "absolute",
-                    left: `${qrXPercent}%`,
-                    top: `${qrYPercent}%`,
-                    transform: "translate(-50%, -50%)",
-                    width: qrSize,
-                    height: qrSize,
-                    objectFit: "contain",
-                  },
-                }),
-              ]
-            : []),
-        ),
-        {
-          width: width,
-          height: height,
-          fonts: [
-            {
-              name: "THSarabunNew",
-              data: fontBytes,
-              style: "normal",
-            },
-          ],
-        },
-      );
-
-      const resHeaders = new Headers(imageResponse.headers);
-
-      if (enrollment.certificate.length === 0) {
-        await prisma.certificate.upsert({
-          where: {
-            student_enrollment_id: enrollment.student_enrollment_id,
-          },
-          update: {},
-          create: {
-            certificate_no: assignedCertNo,
-            certificate_no_star: assignedCertNo,
-            file_url: "",
-            student_enrollment_id: enrollment.student_enrollment_id,
-          },
-        });
-      }
-
-      resHeaders.set(
-        "Content-Disposition",
-        `${disposition}; filename="certificate_${student.students_id}_${campId}.png"`,
-      );
-      // เกียรติบัตรมีข้อมูลที่แก้ไขได้หลายส่วน จึงห้าม browser/proxy
-      // เก็บผลลัพธ์ที่สร้างเสร็จแล้วไว้ใช้ซ้ำทั้งหน้า preview และ download
-      resHeaders.set(
-        "Cache-Control",
-        "no-store, no-cache, must-revalidate, proxy-revalidate",
-      );
-      resHeaders.set("Pragma", "no-cache");
-      resHeaders.set("Expires", "0");
-      if (assignedCertNo != null) {
-        resHeaders.set("X-Certificate-No", String(assignedCertNo));
-      }
-      if (isOverflow) {
-        resHeaders.set("X-Certificate-Overflow", String(overflowAmount));
-      }
-
-      return new NextResponse(imageResponse.body, {
-        status: imageResponse.status,
-        statusText: imageResponse.statusText,
-        headers: resHeaders,
-      });
-    }
-
-    // Load PDF
-    const pdfDoc = await PDFDocument.create();
-
-    pdfDoc.registerFontkit(fontkit);
-
-    // Embed Image
-    let embeddedImage;
-
-    if (
-      contentType.includes("png") ||
-      camp.img_certificate_url.toLowerCase().endsWith(".png")
-    ) {
-      embeddedImage = await pdfDoc.embedPng(imageBuffer);
-    } else {
-      embeddedImage = await pdfDoc.embedJpg(imageBuffer);
-    }
-
-    const { width, height } = embeddedImage.scale(1);
-    const page = pdfDoc.addPage([width, height]);
-
-    page.drawImage(embeddedImage, {
-      x: 0,
-      y: 0,
-      width: width,
-      height: height,
-    });
-
-    let fontBytes;
-
-    try {
-      fontBytes = getFontBytes();
-    } catch (e) {
-      return NextResponse.json(
-        { error: "Font file not found on server." },
-        { status: 500 },
-      );
-    }
-    const customFont = await pdfDoc.embedFont(fontBytes);
-
-    const hexToRgb = (hex: string) => {
-      const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-
-      return result
-        ? {
-            r: parseInt(result[1], 16) / 255,
-            g: parseInt(result[2], 16) / 255,
-            b: parseInt(result[3], 16) / 255,
-          }
-        : { r: 0, g: 0, b: 0 };
-    };
-
-    // วาดชื่อนักเรียน
-    const textWidth = customFont.widthOfTextAtSize(fullName, fontSize);
-    const x = (xPercent / 100) * width - textWidth / 2;
-    const y = (1 - yPercent / 100) * height - fontSize / 3;
-    const fontColorRgb = hexToRgb(fontColorHex);
-
-    page.drawText(fullName, {
-      x: x,
-      y: y,
-      size: fontSize,
-      font: customFont,
-      color: rgb(fontColorRgb.r, fontColorRgb.g, fontColorRgb.b),
-    });
-
-    // วาดเลขที่เกียรติบัตร (ถ้าเปิดใช้)
-    if (showNumber && numberText) {
-      const numTextWidth = customFont.widthOfTextAtSize(
-        numberText,
-        numFontSize,
-      );
-      const numX = (numXPercent / 100) * width - numTextWidth / 2;
-      const numY = (1 - numYPercent / 100) * height - numFontSize / 3;
-      const numColorRgb = hexToRgb(numColorHex);
-
-      page.drawText(numberText, {
-        x: numX,
-        y: numY,
-        size: numFontSize,
-        font: customFont,
-        color: rgb(numColorRgb.r, numColorRgb.g, numColorRgb.b),
-      });
-    }
-
-    if (verificationUrl) {
-      const qrBuffer = await QRCode.toBuffer(verificationUrl, {
-        errorCorrectionLevel: "M",
-        margin: 1,
-        width: Math.round(qrSize),
-      });
-      const embeddedQr = await pdfDoc.embedPng(qrBuffer);
-
-      page.drawImage(embeddedQr, {
-        x: (qrXPercent / 100) * width - qrSize / 2,
-        y: (1 - qrYPercent / 100) * height - qrSize / 2,
-        width: qrSize,
-        height: qrSize,
-      });
-    }
-
-    const pdfBytes = await pdfDoc.save();
-
+    // การออกเลขและบันทึกสถานะยังเกิดบน server ส่วน browser จะเป็นผู้ render
+    // เทมเพลต ชื่อ เลข และ QR เป็น PNG/PDF จาก manifest นี้
     if (enrollment.certificate.length === 0) {
       await prisma.certificate.upsert({
         where: {
@@ -678,30 +325,52 @@ export async function GET(request: Request, context: any) {
       });
     }
 
-    const pdfHeaders: Record<string, string> = {
-      "Content-Type": "application/pdf",
-      "Content-Disposition": `${disposition}; filename="certificate_${student.students_id}_${campId}.pdf"`,
-      "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
-      Pragma: "no-cache",
-      Expires: "0",
+    const certificate: CertificateRenderManifest = {
+      version: 1,
+      template: {
+        url: camp.img_certificate_url,
+        format: camp.img_certificate_format,
+      },
+      fontUrl: "/fonts/THSarabunNew.ttf",
+      nameStyle: {
+        xPercent: camp.cert_name_x ?? 50,
+        yPercent: camp.cert_name_y ?? 50,
+        fontSize: camp.cert_font_size || 48,
+        color: camp.cert_font_color || "#000000",
+      },
+      numberStyle: {
+        xPercent: camp.cert_number_x ?? 50,
+        yPercent: camp.cert_number_y ?? 10,
+        fontSize: camp.cert_number_size || 36,
+        color: camp.cert_number_color || "#000000",
+      },
+      qrStyle: {
+        xPercent: camp.cert_qr_x ?? 90,
+        yPercent: camp.cert_qr_y ?? 88,
+        size: camp.cert_qr_size || 140,
+      },
+      recipients: [{ fullName, numberText, verificationUrl }],
     };
 
-    if (assignedCertNo != null) {
-      pdfHeaders["X-Certificate-No"] = String(assignedCertNo);
-    }
-    if (isOverflow) {
-      pdfHeaders["X-Certificate-Overflow"] = String(overflowAmount);
-    }
-
-    return new NextResponse(pdfBytes, {
-      status: 200,
-      headers: pdfHeaders,
-    });
+    return NextResponse.json(
+      {
+        certificate,
+        certificateNo: assignedCertNo,
+        overflowAmount: isOverflow ? overflowAmount : 0,
+      },
+      {
+        headers: {
+          "Cache-Control": "no-store, no-cache, must-revalidate",
+          Pragma: "no-cache",
+          Expires: "0",
+        },
+      },
+    );
   } catch (error) {
-    console.error("Error generating certificate:", error);
+    console.error("Error preparing certificate:", error);
 
     return NextResponse.json(
-      { error: "Failed to generate certificate." },
+      { error: "Failed to prepare certificate." },
       { status: 500 },
     );
   }

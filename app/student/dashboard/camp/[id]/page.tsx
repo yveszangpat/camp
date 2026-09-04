@@ -1,5 +1,7 @@
 "use client";
 
+import type { CertificateRenderManifest } from "@/lib/certificate-renderer";
+
 import { useState, useEffect, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Button } from "@heroui/button";
@@ -263,7 +265,18 @@ export default function StudentCampDetailPage() {
   // Certificate Preview Modal State
   const [isCertPreviewModalOpen, setIsCertPreviewModalOpen] = useState(false);
   const [certImageLoading, setCertImageLoading] = useState(true);
-  const [certPreviewRevision, setCertPreviewRevision] = useState(0);
+  const [certPreviewUrl, setCertPreviewUrl] = useState<string | null>(null);
+  const [certPreviewError, setCertPreviewError] = useState<string | null>(null);
+  const certificateManifestRef = useRef<{
+    campId: string;
+    manifest: CertificateRenderManifest;
+  } | null>(null);
+  const certificateRequestRef = useRef<{
+    campId: string;
+    request: Promise<CertificateRenderManifest>;
+  } | null>(null);
+  const certificatePreviewBlobRef = useRef<Blob | null>(null);
+  const certificatePreviewUrlRef = useRef<string | null>(null);
   const [downloadingFormat, setDownloadingFormat] = useState<
     "pdf" | "png" | null
   >(null);
@@ -327,6 +340,27 @@ export default function StudentCampDetailPage() {
   useEffect(() => {
     window.scrollTo(0, 0); // เลื่อนขึ้นไปบนสุดทุกครั้งที่เข้าหน้าค่าย
     fetchCamp();
+  }, [id]);
+
+  useEffect(() => {
+    certificateManifestRef.current = null;
+    certificateRequestRef.current = null;
+    certificatePreviewBlobRef.current = null;
+
+    if (certificatePreviewUrlRef.current) {
+      URL.revokeObjectURL(certificatePreviewUrlRef.current);
+      certificatePreviewUrlRef.current = null;
+    }
+
+    setCertPreviewUrl(null);
+    setCertPreviewError(null);
+
+    return () => {
+      if (certificatePreviewUrlRef.current) {
+        URL.revokeObjectURL(certificatePreviewUrlRef.current);
+        certificatePreviewUrlRef.current = null;
+      }
+    };
   }, [id]);
 
   useEffect(() => {
@@ -530,53 +564,127 @@ export default function StudentCampDetailPage() {
     }
   };
 
+  const getCertificateManifest = async () => {
+    const currentCampId = String(id);
+
+    if (certificateManifestRef.current?.campId === currentCampId) {
+      return certificateManifestRef.current.manifest;
+    }
+
+    if (certificateRequestRef.current?.campId === currentCampId) {
+      return certificateRequestRef.current.request;
+    }
+
+    const request = (async () => {
+      const response = await fetch(`/api/camps/${id}/certificate`, {
+        cache: "no-store",
+      });
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok || !data.certificate) {
+        const requestError = new Error(
+          data.error || "ไม่สามารถเตรียมเกียรติบัตรได้",
+        ) as Error & { status?: number };
+
+        requestError.status = response.status;
+        throw requestError;
+      }
+
+      const manifest = data.certificate as CertificateRenderManifest;
+
+      certificateManifestRef.current = { campId: currentCampId, manifest };
+
+      return manifest;
+    })();
+
+    certificateRequestRef.current = { campId: currentCampId, request };
+
+    try {
+      return await request;
+    } finally {
+      if (certificateRequestRef.current?.request === request) {
+        certificateRequestRef.current = null;
+      }
+    }
+  };
+
+  const cacheCertificatePreview = (blob: Blob) => {
+    certificatePreviewBlobRef.current = blob;
+
+    if (certificatePreviewUrlRef.current) {
+      URL.revokeObjectURL(certificatePreviewUrlRef.current);
+    }
+
+    const previewUrl = URL.createObjectURL(blob);
+
+    certificatePreviewUrlRef.current = previewUrl;
+    setCertPreviewUrl(previewUrl);
+  };
+
   const handleCertDownload = async (format: "pdf" | "png") => {
     if (downloadingFormat) return;
     setDownloadingFormat(format);
 
     try {
-      const response = await fetch(
-        `/api/camps/${id}/certificate?format=${format}&download=true&revision=${Date.now()}`,
-        { cache: "no-store" },
-      );
+      const manifest = await getCertificateManifest();
+      const renderer = await import("@/lib/certificate-renderer");
+      const blob =
+        format === "png"
+          ? (certificatePreviewBlobRef.current ??
+            (await renderer.renderCertificatePng(manifest)))
+          : await renderer.renderCertificatesPdf(manifest);
 
-      if (!response.ok) {
-        if (response.status === 429) {
-          toast.error("คุณดาวน์โหลดบ่อยเกินไป กรุณารอสักครู่ก่อนดาวน์โหลดใหม่");
-        } else {
-          toast.error("เกิดข้อผิดพลาดในการดาวน์โหลดเกียรติบัตร");
-        }
-        setDownloadingFormat(null);
-
-        return;
+      if (format === "png" && !certificatePreviewBlobRef.current) {
+        cacheCertificatePreview(blob);
       }
 
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement("a");
-
-      a.style.display = "none";
-      a.href = url;
-      a.download = `certificate_${id}.${format}`;
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
-
-      // Disable buttons for a few seconds to prevent spam
-      setTimeout(() => {
-        setDownloadingFormat(null);
-      }, 3000);
+      renderer.downloadCertificateBlob(blob, `certificate_${id}.${format}`);
     } catch (error) {
-      toast.error("เกิดข้อผิดพลาดในการดาวน์โหลด");
+      const requestError = error as Error & { status?: number };
+
+      toast.error(
+        requestError.status === 429
+          ? "คุณดาวน์โหลดบ่อยเกินไป กรุณารอสักครู่ก่อนดาวน์โหลดใหม่"
+          : requestError.message || "เกิดข้อผิดพลาดในการดาวน์โหลด",
+      );
+    } finally {
       setDownloadingFormat(null);
     }
   };
 
   const openCertPreview = () => {
-    setCertImageLoading(true);
-    setCertPreviewRevision(Date.now());
     setIsCertPreviewModalOpen(true);
+    setCertPreviewError(null);
+
+    if (certificatePreviewUrlRef.current) {
+      setCertPreviewUrl(certificatePreviewUrlRef.current);
+      setCertImageLoading(false);
+
+      return;
+    }
+
+    setCertImageLoading(true);
+
+    void (async () => {
+      try {
+        const manifest = await getCertificateManifest();
+        const { renderCertificatePng } = await import(
+          "@/lib/certificate-renderer"
+        );
+        const blob = await renderCertificatePng(manifest);
+
+        cacheCertificatePreview(blob);
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : "เกิดข้อผิดพลาดในการสร้างเกียรติบัตร";
+
+        setCertPreviewError(message);
+        toast.error(message);
+        setCertImageLoading(false);
+      }
+    })();
   };
 
   const handleRegister = async () => {
@@ -1866,19 +1974,26 @@ export default function StudentCampDetailPage() {
             {/* Body */}
             <div className="overflow-y-auto p-6 flex flex-col items-center">
               <div className="w-full bg-gray-50 rounded-2xl overflow-hidden border border-gray-200 shadow-inner flex items-center justify-center min-h-[250px] relative p-2">
-                <img
-                  alt="Certificate Preview"
-                  className={`w-full h-auto object-contain rounded-xl shadow-md transition-opacity duration-300 ${certImageLoading ? "opacity-0" : "opacity-100"}`}
-                  src={`/api/camps/${id}/certificate?format=png&revision=${certPreviewRevision}`}
-                  onLoad={() => setCertImageLoading(false)}
-                />
+                {certPreviewUrl && (
+                  <img
+                    alt="Certificate Preview"
+                    className={`w-full h-auto object-contain rounded-xl shadow-md transition-opacity duration-300 ${certImageLoading ? "opacity-0" : "opacity-100"}`}
+                    src={certPreviewUrl}
+                    onLoad={() => setCertImageLoading(false)}
+                  />
+                )}
                 {certImageLoading && (
                   <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-white/50 backdrop-blur-sm z-10">
                     <LoadingSpinner size="md" />
                     <p className="text-sm font-bold text-gray-500 animate-pulse">
-                      กำลังสร้างเกียรติบัตร รอสักครู่....
+                      กำลังสร้างเกียรติบัตรบนอุปกรณ์ รอสักครู่....
                     </p>
                   </div>
+                )}
+                {certPreviewError && !certImageLoading && (
+                  <p className="px-6 text-center text-sm font-bold text-red-500">
+                    {certPreviewError}
+                  </p>
                 )}
               </div>
             </div>
@@ -1889,7 +2004,7 @@ export default function StudentCampDetailPage() {
                 <Button
                   fullWidth
                   className="font-bold text-base h-14 rounded-2xl bg-[#5d7c6f] text-white shadow-lg shadow-[#5d7c6f]/20"
-                  isDisabled={!!downloadingFormat}
+                  isDisabled={!!downloadingFormat || certImageLoading}
                   isLoading={downloadingFormat === "pdf"}
                   startContent={
                     downloadingFormat !== "pdf" && <FileText size={20} />
@@ -1901,7 +2016,7 @@ export default function StudentCampDetailPage() {
                 <Button
                   fullWidth
                   className="font-bold text-base h-14 rounded-2xl bg-[#1A202C] text-white shadow-lg shadow-gray-900/20"
-                  isDisabled={!!downloadingFormat}
+                  isDisabled={!!downloadingFormat || certImageLoading}
                   isLoading={downloadingFormat === "png"}
                   startContent={
                     downloadingFormat !== "png" && <Download size={20} />

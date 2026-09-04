@@ -1,6 +1,6 @@
 /**
  * load-test-cert.mjs
- * ทดสอบ concurrent certificate download
+ * ทดสอบ concurrent certificate manifest requests
  * 
  * วิธีใช้:
  *   node scripts/load-test-cert.mjs [concurrency] [campId]
@@ -17,7 +17,6 @@ const BASE_URL = "http://localhost:3000";
 const JWT_SECRET = "8f4a2b9d6c1e3f7a5d0b2c8e4f1a9d3b6c7e2f5a8d0b1c4e9f3a6d2b5c7e1f4";
 const CONCURRENCY = parseInt(process.argv[2] ?? "10"); // จำนวน concurrent requests
 const CAMP_ID = parseInt(process.argv[3] ?? "60001");
-const FORMAT = "pdf"; // pdf หรือ png
 
 // ===== SETUP =====
 const prisma = new PrismaClient();
@@ -38,11 +37,11 @@ async function makeToken(student) {
 }
 
 // เรียก API 1 ครั้ง
-async function downloadCert(student, token, index) {
+async function requestCertificateManifest(student, token, index) {
   const start = Date.now();
   try {
     const res = await fetch(
-      `${BASE_URL}/api/camps/${CAMP_ID}/certificate?format=${FORMAT}&download=true`,
+      `${BASE_URL}/api/camps/${CAMP_ID}/certificate`,
       {
         headers: {
           Cookie: `student_session=${token}`,
@@ -50,25 +49,23 @@ async function downloadCert(student, token, index) {
       }
     );
     const elapsed = Date.now() - start;
+    const body = await res.json().catch(() => ({}));
 
     if (res.ok) {
-      const certNo = res.headers.get("X-Certificate-No") ?? "N/A";
-      const overflow = res.headers.get("X-Certificate-Overflow");
-      const size = parseInt(res.headers.get("content-length") ?? "0");
-      // drain body
-      await res.arrayBuffer();
+      const certNo = body.certificateNo ?? "N/A";
+      const overflow = body.overflowAmount;
+      const size = Buffer.byteLength(JSON.stringify(body));
       return {
         success: true,
         student_id: student.students_id,
         name: `${student.firstname} ${student.lastname}`,
         cert_no: certNo,
-        overflow: overflow ? `+${overflow}` : null,
+        overflow: overflow > 0 ? `+${overflow}` : null,
         elapsed_ms: elapsed,
         size_kb: Math.round(size / 1024),
         index,
       };
     } else {
-      const body = await res.json().catch(() => ({}));
       return {
         success: false,
         student_id: student.students_id,
@@ -97,7 +94,7 @@ async function main() {
   console.log(`🎓 Certificate Load Test`);
   console.log(`   Camp ID    : ${CAMP_ID}`);
   console.log(`   Concurrency: ${CONCURRENCY} requests`);
-  console.log(`   Format     : ${FORMAT}`);
+  console.log(`   Response   : render manifest (rendering runs in browser)`);
   console.log(`   Server     : ${BASE_URL}`);
   console.log("=".repeat(60));
 
@@ -170,7 +167,9 @@ async function main() {
   );
   const overallStart = Date.now();
   const results = await Promise.all(
-    students.map((student, i) => downloadCert(student, tokens[i], i + 1))
+    students.map((student, i) =>
+      requestCertificateManifest(student, tokens[i], i + 1),
+    ),
   );
   const overallElapsed = Date.now() - overallStart;
 

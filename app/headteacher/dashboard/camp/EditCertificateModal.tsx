@@ -1,5 +1,7 @@
 "use client";
 
+import type { CertificateRenderManifest } from "@/lib/certificate-renderer";
+
 import React, { useState, useEffect } from "react";
 import { Award, Download, Save, X } from "lucide-react";
 import { Button } from "@heroui/button";
@@ -219,25 +221,27 @@ export default function EditCertificateModal({
       const response = await fetch(url, {
         method: "GET",
       });
+      const data = await response.json().catch(() => ({}));
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-
         throw new Error(
-          errorData.error || "เกิดข้อผิดพลาดในการดาวน์โหลดเกียรติบัตร",
+          data.error || "เกิดข้อผิดพลาดในการดาวน์โหลดเกียรติบัตร",
         );
       }
 
-      const blob = await response.blob();
-      const downloadUrl = window.URL.createObjectURL(blob);
-      const a = document.createElement("a");
+      if (!data.certificate) {
+        throw new Error("ข้อมูลสำหรับสร้างเกียรติบัตรไม่ครบถ้วน");
+      }
 
-      a.href = downloadUrl;
-      a.download = `certificates_camp_${campData.camp_id}.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.URL.revokeObjectURL(downloadUrl);
+      const renderer = await import("@/lib/certificate-renderer");
+      const blob = await renderer.renderCertificatesPdf(
+        data.certificate as CertificateRenderManifest,
+      );
+
+      renderer.downloadCertificateBlob(
+        blob,
+        `certificates_camp_${campData.camp_id}.pdf`,
+      );
 
       showSuccess("สำเร็จ", "ดาวน์โหลดเกียรติบัตรเรียบร้อยแล้ว");
     } catch (error: any) {

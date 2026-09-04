@@ -1,28 +1,12 @@
-import fs from "fs";
-import path from "path";
+import type { CertificateRenderManifest } from "@/lib/certificate-renderer";
 
 import { NextResponse } from "next/server";
-import { PDFDocument, rgb } from "pdf-lib";
-import fontkit from "@pdf-lib/fontkit";
-import * as QRCode from "qrcode";
 
 import { prisma } from "@/lib/db";
 import { requireTeacher } from "@/lib/auth";
 import { getCertificateEligibility } from "@/lib/certificate-eligibility";
 import { activeCampEnrollmentWhere } from "@/lib/active-camp-student";
 import { buildCertificateVerificationUrl } from "@/lib/certificate-verification";
-
-let cachedFontBytes: Buffer | null = null;
-
-function getFontBytes(): Buffer {
-  if (!cachedFontBytes) {
-    const fontPath = path.join(process.cwd(), "public/fonts/THSarabunNew.ttf");
-
-    cachedFontBytes = fs.readFileSync(fontPath);
-  }
-
-  return cachedFontBytes;
-}
 
 function toThaiNumerals(str: string): string {
   const thaiDigits = ["๐", "๑", "๒", "๓", "๔", "๕", "๖", "๗", "๘", "๙"];
@@ -285,152 +269,6 @@ export async function GET(request: Request, context: any) {
       }
     }
 
-    const imageRes = await fetch(camp.img_certificate_url);
-
-    if (!imageRes.ok) {
-      return NextResponse.json(
-        { error: "Failed to load certificate template image." },
-        { status: 500 },
-      );
-    }
-    const imageBuffer = await imageRes.arrayBuffer();
-    const contentType = imageRes.headers.get("content-type") || "";
-
-    const pdfDoc = await PDFDocument.create();
-
-    pdfDoc.registerFontkit(fontkit);
-
-    let embeddedImage;
-
-    if (
-      contentType.includes("png") ||
-      camp.img_certificate_url.toLowerCase().endsWith(".png")
-    ) {
-      embeddedImage = await pdfDoc.embedPng(imageBuffer);
-    } else {
-      embeddedImage = await pdfDoc.embedJpg(imageBuffer);
-    }
-
-    const { width, height } = embeddedImage.scale(1);
-
-    let fontBytes;
-
-    try {
-      fontBytes = getFontBytes();
-    } catch (e) {
-      return NextResponse.json(
-        { error: "Font file not found on server." },
-        { status: 500 },
-      );
-    }
-    const customFont = await pdfDoc.embedFont(fontBytes);
-
-    const hexToRgb = (hex: string) => {
-      const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-
-      return result
-        ? {
-            r: parseInt(result[1], 16) / 255,
-            g: parseInt(result[2], 16) / 255,
-            b: parseInt(result[3], 16) / 255,
-          }
-        : { r: 0, g: 0, b: 0 };
-    };
-
-    const fontSize = camp.cert_font_size || 48;
-    const xPercent = camp.cert_name_x ?? 50;
-    const yPercent = camp.cert_name_y ?? 50;
-    const fontColorRgb = hexToRgb(camp.cert_font_color || "#000000");
-
-    const numFontSize = camp.cert_number_size || 36;
-    const numXPercent = camp.cert_number_x ?? 50;
-    const numYPercent = camp.cert_number_y ?? 10;
-    const numColorRgb = hexToRgb(camp.cert_number_color || "#000000");
-    const showNumber = camp.cert_show_number;
-    const showQr = camp.cert_show_qr && showNumber;
-    const qrSize = camp.cert_qr_size || 140;
-    const qrXPercent = camp.cert_qr_x ?? 90;
-    const qrYPercent = camp.cert_qr_y ?? 88;
-    const requestOrigin = new URL(request.url).origin;
-
-    for (const enrollment of enrollments) {
-      const page = pdfDoc.addPage([width, height]);
-
-      page.drawImage(embeddedImage, {
-        x: 0,
-        y: 0,
-        width: width,
-        height: height,
-      });
-
-      const prefix = enrollment.student.prefix_name?.trim() || "";
-      const fullName = `${prefix}${enrollment.student.firstname.trim()} ${enrollment.student.lastname.trim()}`;
-
-      const textWidth = customFont.widthOfTextAtSize(fullName, fontSize);
-      const x = (xPercent / 100) * width - textWidth / 2;
-      const y = (1 - yPercent / 100) * height - fontSize / 3;
-
-      page.drawText(fullName, {
-        x: x,
-        y: y,
-        size: fontSize,
-        font: customFont,
-        color: rgb(fontColorRgb.r, fontColorRgb.g, fontColorRgb.b),
-      });
-
-      if (showNumber && enrollment.certificate.length > 0) {
-        const assignedCertNo = enrollment.certificate[0].certificate_no;
-
-        if (assignedCertNo != null) {
-          const numberText = buildCertNumberText(
-            camp.cert_number_prefix || "",
-            assignedCertNo,
-            camp.cert_number_is_thai ?? false,
-            camp.cert_year,
-          );
-
-          const numTextWidth = customFont.widthOfTextAtSize(
-            numberText,
-            numFontSize,
-          );
-          const numX = (numXPercent / 100) * width - numTextWidth / 2;
-          const numY = (1 - numYPercent / 100) * height - numFontSize / 3;
-
-          page.drawText(numberText, {
-            x: numX,
-            y: numY,
-            size: numFontSize,
-            font: customFont,
-            color: rgb(numColorRgb.r, numColorRgb.g, numColorRgb.b),
-          });
-        }
-      }
-
-      const assignedCertNo = enrollment.certificate[0]?.certificate_no;
-
-      if (showQr && assignedCertNo != null) {
-        const verificationUrl = buildCertificateVerificationUrl(
-          requestOrigin,
-          enrollment.student_enrollment_id,
-        );
-        const qrBuffer = await QRCode.toBuffer(verificationUrl, {
-          errorCorrectionLevel: "M",
-          margin: 1,
-          width: Math.round(qrSize),
-        });
-        const embeddedQr = await pdfDoc.embedPng(qrBuffer);
-
-        page.drawImage(embeddedQr, {
-          x: (qrXPercent / 100) * width - qrSize / 2,
-          y: (1 - qrYPercent / 100) * height - qrSize / 2,
-          width: qrSize,
-          height: qrSize,
-        });
-      }
-    }
-
-    const pdfBytes = await pdfDoc.save();
-
     if (!camp.cert_show_number || camp.cert_number_start == null) {
       const untrackedCertificates = enrollments
         .filter((enrollment) => enrollment.certificate.length === 0)
@@ -449,18 +287,75 @@ export async function GET(request: Request, context: any) {
       }
     }
 
-    return new NextResponse(pdfBytes, {
-      status: 200,
-      headers: {
-        "Content-Type": "application/pdf",
-        "Content-Disposition": `attachment; filename="bulk_certificates_camp_${campId}.pdf"`,
-      },
+    const requestOrigin = new URL(request.url).origin;
+    const recipients = enrollments.map((enrollment) => {
+      const prefix = enrollment.student.prefix_name?.trim() || "";
+      const fullName = `${prefix}${enrollment.student.firstname.trim()} ${enrollment.student.lastname.trim()}`;
+      const assignedCertNo = enrollment.certificate[0]?.certificate_no ?? null;
+      const numberText =
+        camp.cert_show_number && assignedCertNo != null
+          ? buildCertNumberText(
+              camp.cert_number_prefix || "",
+              assignedCertNo,
+              camp.cert_number_is_thai,
+              camp.cert_year,
+            )
+          : null;
+      const verificationUrl =
+        camp.cert_show_qr && camp.cert_show_number && assignedCertNo != null
+          ? buildCertificateVerificationUrl(
+              requestOrigin,
+              enrollment.student_enrollment_id,
+            )
+          : null;
+
+      return { fullName, numberText, verificationUrl };
     });
-  } catch (error) {
-    console.error("Error generating bulk certificates:", error);
+
+    // ส่งข้อมูลที่ผ่านการตรวจสิทธิ์และจองเลขแล้วให้ browser เป็นผู้สร้าง PDF
+    // เพื่อตัดการ fetch รูป วาด QR และประกอบ PDF ออกจาก server request
+    const certificate: CertificateRenderManifest = {
+      version: 1,
+      template: {
+        url: camp.img_certificate_url,
+        format: camp.img_certificate_format,
+      },
+      fontUrl: "/fonts/THSarabunNew.ttf",
+      nameStyle: {
+        xPercent: camp.cert_name_x ?? 50,
+        yPercent: camp.cert_name_y ?? 50,
+        fontSize: camp.cert_font_size || 48,
+        color: camp.cert_font_color || "#000000",
+      },
+      numberStyle: {
+        xPercent: camp.cert_number_x ?? 50,
+        yPercent: camp.cert_number_y ?? 10,
+        fontSize: camp.cert_number_size || 36,
+        color: camp.cert_number_color || "#000000",
+      },
+      qrStyle: {
+        xPercent: camp.cert_qr_x ?? 90,
+        yPercent: camp.cert_qr_y ?? 88,
+        size: camp.cert_qr_size || 140,
+      },
+      recipients,
+    };
 
     return NextResponse.json(
-      { error: "Failed to generate certificates." },
+      { certificate },
+      {
+        headers: {
+          "Cache-Control": "no-store, no-cache, must-revalidate",
+          Pragma: "no-cache",
+          Expires: "0",
+        },
+      },
+    );
+  } catch (error) {
+    console.error("Error preparing bulk certificates:", error);
+
+    return NextResponse.json(
+      { error: "Failed to prepare certificates." },
       { status: 500 },
     );
   }
