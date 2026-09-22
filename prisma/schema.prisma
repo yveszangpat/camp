@@ -29,16 +29,17 @@ model teachers {
   email       String    @db.VarChar(255)
   deletedAt   DateTime?
 
-  classrooms                classrooms[]
-  classroom_teacher         classroom_teacher[]
-  camp                      camp[]
-  teacher_enrollment        teacher_enrollment[]
-  survey_template           survey_template[]
-  camp_location_update      camp_location_update[]
-  project_document_template project_document_template[]
-  camp_bus_events           camp_bus_event[]
-  camp_bus_teacher          camp_bus_teacher[]
-  bus_layout_template       bus_layout_template[]
+  classrooms                        classrooms[]
+  classroom_teacher                 classroom_teacher[]
+  camp                              camp[]
+  teacher_enrollment                teacher_enrollment[]
+  survey_template                   survey_template[]
+  camp_location_update              camp_location_update[]
+  project_document_template         project_document_template[]
+  project_summary_document_template project_summary_document_template[]
+  camp_bus_events                   camp_bus_event[]
+  camp_bus_teacher                  camp_bus_teacher[]
+  bus_layout_template               bus_layout_template[]
 
   @@index([deletedAt])
 }
@@ -219,7 +220,9 @@ model camp {
   location_updates         camp_location_update[]
   student_location_updates student_location_update[]
   project_document         camp_project_document?
+  project_summary_document camp_project_summary_document?
   camp_bus_teacher         camp_bus_teacher[]
+  email_reminders          camp_email_reminder[]
 
   @@index([deletedAt])
   @@index([created_by_teacher_id])
@@ -272,6 +275,70 @@ model camp_project_document {
   @@index([camp_camp_id])
 }
 
+model camp_project_summary_document {
+  camp_project_summary_document_id Int       @id @default(autoincrement())
+  camp_camp_id                     Int       @unique
+  camp                             camp      @relation(fields: [camp_camp_id], references: [camp_id], onDelete: Cascade)
+  fiscal_year                      Int
+  project_name                     String    @db.VarChar(500)
+  project_code                     String?   @db.VarChar(100)
+  activity_name                    String?   @db.VarChar(500)
+  activity_order                   String?   @db.VarChar(100)
+  project_nature                   String    @default("CONTINUING") @db.VarChar(30)
+  project_type                     String    @default("CONTINUING") @db.VarChar(30)
+  plan_alignment                   String    @default("IN_EVALUATION_PLAN") @db.VarChar(30)
+  standards                        String?   @db.Text
+  standard_alignments              Json
+  strategy                         String?   @db.Text
+  responsible_people               String?   @db.Text
+  department                       String?   @db.VarChar(500)
+  objectives                       Json
+  execution_status                 String    @default("COMPLETED") @db.VarChar(30)
+  duration_text                    String?   @db.VarChar(500)
+  location_text                    String?   @db.VarChar(500)
+  budget_received                  Float     @default(0)
+  budget_spent                     Float     @default(0)
+  budget_source                    String?   @db.VarChar(100)
+  quantitative_results             Json
+  qualitative_results              Json
+  success_indicators               Json
+  evaluation_results               Json
+  evaluation_summary               String?   @db.LongText
+  overall_average                  Float?
+  overall_sd                       Float?
+  top_strengths                    Json
+  suggestions                      Json
+  operation_assessment             Json
+  problems                         String?   @db.LongText
+  recommendations                  String?   @db.LongText
+  continuation_reason              String?   @db.LongText
+  signatories                      Json
+  status                           String    @default("DRAFT") @db.VarChar(20)
+  finalized_at                     DateTime?
+  source_snapshot_at               DateTime?
+  created_at                       DateTime  @default(now())
+  updated_at                       DateTime  @updatedAt
+
+  photos camp_project_summary_photo[]
+
+  @@index([camp_camp_id])
+  @@index([status])
+}
+
+model camp_project_summary_photo {
+  camp_project_summary_photo_id Int                           @id @default(autoincrement())
+  summary_document_id           Int
+  summary_document              camp_project_summary_document @relation(fields: [summary_document_id], references: [camp_project_summary_document_id], onDelete: Cascade)
+  image_url                     String                        @db.Text
+  public_id                     String?                       @db.VarChar(255)
+  caption                       String?                       @db.VarChar(500)
+  sort_order                    Int                           @default(0)
+  created_at                    DateTime                      @default(now())
+  updated_at                    DateTime                      @updatedAt
+
+  @@index([summary_document_id, sort_order])
+}
+
 model project_document_template {
   project_document_template_id Int      @id @default(autoincrement())
   name                         String   @db.VarChar(255)
@@ -284,6 +351,20 @@ model project_document_template {
 
   @@unique([created_by_teacher_id, name])
   @@index([created_by_teacher_id, updated_at])
+}
+
+model project_summary_document_template {
+  project_summary_document_template_id Int      @id @default(autoincrement())
+  name                                 String   @db.VarChar(255)
+  description                          String?  @db.VarChar(500)
+  template_data                        Json
+  created_by_teacher_id                Int
+  created_by                           teachers @relation(fields: [created_by_teacher_id], references: [teachers_id], onDelete: Cascade, map: "summary_doc_template_teacher_fkey")
+  created_at                           DateTime @default(now())
+  updated_at                           DateTime @updatedAt
+
+  @@unique([created_by_teacher_id, name], map: "summary_doc_template_teacher_name_key")
+  @@index([created_by_teacher_id, updated_at], map: "summary_doc_template_teacher_updated_idx")
 }
 
 model document_reference_option {
@@ -406,6 +487,8 @@ enum camp_bus_event_type {
   ALIGHT
   PARK
   DEPART
+  REMIND_BOARD
+  REMIND_ALIGHT
 }
 
 enum bus_layout_template_status {
@@ -882,12 +965,14 @@ model vulgar_words {
 }
 
 model survey {
-  survey_id              Int      @id @default(autoincrement())
-  title                  String   @db.VarChar(255)
-  description            String?  @db.Text
-  created_at             DateTime @default(now())
-  is_required_for_cert   Boolean  @default(true)
-  is_accepting_responses Boolean  @default(true)
+  survey_id              Int       @id @default(autoincrement())
+  title                  String    @db.VarChar(255)
+  description            String?   @db.Text
+  created_at             DateTime  @default(now())
+  is_required_for_cert   Boolean   @default(true)
+  is_accepting_responses Boolean   @default(true)
+  ai_summary             Json?
+  ai_summary_updated_at  DateTime?
 
   camp_camp_id Int  @unique
   camp         camp @relation(fields: [camp_camp_id], references: [camp_id])
@@ -968,4 +1053,50 @@ enum survey_question_type {
   header
   grid
   checkbox
+}
+
+// One row per camp/recipient/reminder. This is the durable idempotency record
+// for the email provider and lets the Cron job resume after a quota/error.
+model camp_email_reminder {
+  reminder_id         Int       @id @default(autoincrement())
+  camp_camp_id        Int
+  recipient_key       String    @db.VarChar(64) // student:123 or teacher:45
+  recipient_email     String    @db.VarChar(255)
+  recipient_name      String    @db.VarChar(255)
+  camp_start_date_key String    @db.VarChar(10) // Bangkok date, YYYY-MM-DD
+  reminder_type       String    @db.VarChar(30)
+  status              String    @default("PENDING") @db.VarChar(20)
+  attempts            Int       @default(0)
+  provider_message_id String?   @db.VarChar(255)
+  batch_key           String?   @db.VarChar(64)
+  claim_token         String?   @db.VarChar(64)
+  claimed_at          DateTime?
+  sent_at             DateTime?
+  last_error          String?   @db.Text
+  created_at          DateTime  @default(now())
+  updated_at          DateTime  @updatedAt
+
+  camp camp @relation(fields: [camp_camp_id], references: [camp_id], onDelete: Cascade)
+
+  @@unique([camp_camp_id, recipient_key, camp_start_date_key, reminder_type])
+  @@index([status, camp_start_date_key, created_at])
+  @@index([camp_camp_id, status])
+}
+
+// One row per Bangkok calendar day. It serializes Cron executions and keeps
+// the account-wide send budget durable across duplicate/manual invocations.
+model camp_email_daily_run {
+  date_key         String    @id @db.VarChar(10)
+  attempted_count  Int       @default(0)
+  sent_count       Int       @default(0)
+  failed_count     Int       @default(0)
+  uncertain_count  Int       @default(0)
+  lock_token       String?   @db.VarChar(64)
+  locked_at        DateTime?
+  last_started_at  DateTime?
+  last_finished_at DateTime?
+  created_at       DateTime  @default(now())
+  updated_at       DateTime  @updatedAt
+
+  @@index([locked_at])
 }

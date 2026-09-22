@@ -150,7 +150,7 @@ export default function SurveyResultsModal({
       const res = await fetch("/api/surveys/ai-summary", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ campId }),
+        body: JSON.stringify({ campId, force: true }),
       });
 
       if (!res.ok) {

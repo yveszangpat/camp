@@ -6,6 +6,10 @@ import { requireStudent } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { activeCampStudentWhere } from "@/lib/active-camp-student";
+import {
+  BUS_REMINDER_TTL_MS,
+  getActiveBusReminder,
+} from "@/lib/camp-bus-reminder";
 
 export async function GET(request: Request, context: any) {
   const { student, error: authError } = await requireStudent();
@@ -78,6 +82,17 @@ export async function GET(request: Request, context: any) {
         bus: {
           select: {
             status: true,
+            events: {
+              where: {
+                event_type: { in: ["REMIND_BOARD", "REMIND_ALIGHT"] },
+                created_at: {
+                  gte: new Date(Date.now() - BUS_REMINDER_TTL_MS),
+                },
+              },
+              orderBy: { created_at: "desc" },
+              take: 6,
+              select: { event_type: true, created_at: true },
+            },
           },
         },
       },
@@ -87,6 +102,8 @@ export async function GET(request: Request, context: any) {
       return NextResponse.json({ configured: false });
     }
 
+    const isOnBus = assignment.status === "ON_BUS";
+
     return NextResponse.json(
       {
         statusOnly: true,
@@ -94,8 +111,12 @@ export async function GET(request: Request, context: any) {
         busStatus: assignment.bus.status,
         studentStatus: assignment.status,
         participationStatus: assignment.participation_status,
-        isOnBus: assignment.status === "ON_BUS",
+        isOnBus,
         lastBoardedAt: assignment.last_boarded_at,
+        reminder:
+          assignment.participation_status === "ACTIVE"
+            ? getActiveBusReminder(assignment.bus.events, isOnBus)
+            : null,
       },
       { headers: { "Cache-Control": "private, no-store" } },
     );
@@ -145,6 +166,17 @@ export async function GET(request: Request, context: any) {
               registration_plate: true,
               status: true,
               floor_count: true,
+              events: {
+                where: {
+                  event_type: { in: ["REMIND_BOARD", "REMIND_ALIGHT"] },
+                  created_at: {
+                    gte: new Date(Date.now() - BUS_REMINDER_TTL_MS),
+                  },
+                },
+                orderBy: { created_at: "desc" },
+                take: 6,
+                select: { event_type: true, created_at: true },
+              },
               classroom: {
                 select: {
                   grade: true,
@@ -195,6 +227,7 @@ export async function GET(request: Request, context: any) {
 
   const ownPosition = assignment.position;
   const ownFloor = ownPosition?.floor?.floor_number;
+  const isOnBus = assignment.status === "ON_BUS";
 
   return NextResponse.json(
     {
@@ -229,8 +262,12 @@ export async function GET(request: Request, context: any) {
       student: {
         status: assignment.status,
         participationStatus: assignment.participation_status,
-        isOnBus: assignment.status === "ON_BUS",
+        isOnBus,
         lastBoardedAt: assignment.last_boarded_at,
+        reminder:
+          assignment.participation_status === "ACTIVE"
+            ? getActiveBusReminder(assignment.bus.events, isOnBus)
+            : null,
         position: ownPosition
           ? {
               positionId: ownPosition.position_id,

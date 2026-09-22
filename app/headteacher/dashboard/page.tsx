@@ -28,6 +28,8 @@ import {
   CheckCircle2,
   LogOut,
   RefreshCw,
+  BellRing,
+  ChevronDown,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 
@@ -217,6 +219,15 @@ interface TeacherBusShortcut {
     registrationPlate: string | null;
     status: "PARKED" | "TRAVELING";
     floorCount: number;
+    studentCounts: {
+      total: number;
+      onBus: number;
+      offBus: number;
+    };
+    reminders: Array<{
+      action: "board" | "alight";
+      sentAt: string;
+    }>;
   };
   teacher: {
     status: "ON_BUS" | "OFF_BUS";
@@ -327,6 +338,15 @@ function DashboardContent() {
   );
   const [refreshingBus, setRefreshingBus] = useState(false);
   const [busRefreshCooldown, setBusRefreshCooldown] = useState(0);
+  const [expandedReminderCampId, setExpandedReminderCampId] = useState<
+    number | null
+  >(null);
+  const [sendingReminderKey, setSendingReminderKey] = useState<string | null>(
+    null,
+  );
+  const [recentlySentReminderKeys, setRecentlySentReminderKeys] = useState<
+    string[]
+  >([]);
 
   const busAssignments = teacherBusData?.assignments ?? [];
 
@@ -421,6 +441,70 @@ function DashboardContent() {
       `คุณต้องการยืนยัน${actionLabel} ${assignment.bus.name} ใช่หรือไม่?`,
       () => changeTeacherBusStatus(assignment, action),
       `ยืนยัน${actionLabel}`,
+    );
+  };
+
+  const sendTeacherBusReminder = async (
+    assignment: TeacherBusShortcut,
+    action: "board" | "alight",
+  ) => {
+    const reminderKey = `${assignment.campId}:${action}`;
+
+    if (sendingReminderKey !== null) return;
+    setSendingReminderKey(reminderKey);
+
+    try {
+      const response = await fetch(
+        `/api/teacher/camps/${assignment.campId}/bus/remind`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action }),
+        },
+      );
+      const result = await readResponseBody(response);
+
+      if (!response.ok) {
+        throw new Error(result?.error || "ส่งการเตือนไม่สำเร็จ");
+      }
+
+      setRecentlySentReminderKeys((current) => [
+        ...current.filter((key) => key !== reminderKey),
+        reminderKey,
+      ]);
+      window.setTimeout(() => {
+        setRecentlySentReminderKeys((current) =>
+          current.filter((key) => key !== reminderKey),
+        );
+      }, 60_000);
+      await mutateTeacherBus();
+      showSuccess("ส่งการเตือนแล้ว", result.message);
+    } catch (error) {
+      await mutateTeacherBus();
+      showError(
+        "ส่งการเตือนไม่สำเร็จ",
+        error instanceof Error ? error.message : "กรุณาลองใหม่อีกครั้ง",
+      );
+    } finally {
+      setSendingReminderKey(null);
+    }
+  };
+
+  const requestTeacherBusReminder = (
+    assignment: TeacherBusShortcut,
+    action: "board" | "alight",
+  ) => {
+    const count =
+      action === "board"
+        ? assignment.bus.studentCounts.offBus
+        : assignment.bus.studentCounts.onBus;
+    const actionLabel = action === "board" ? "ขึ้นรถ" : "ลงรถ";
+
+    showConfirm(
+      `เตือนให้นักเรียนกด${actionLabel}`,
+      `ระบบจะแจ้งเฉพาะนักเรียน ${count} คนที่ยังไม่ได้กด${actionLabel} การแจ้งเตือนจะแสดงเป็นเวลา 30 นาที`,
+      () => sendTeacherBusReminder(assignment, action),
+      `ส่งเตือน ${count} คน`,
     );
   };
 
@@ -1021,6 +1105,9 @@ function DashboardContent() {
                 const checkedAt = formatTeacherBusCheckedAt(
                   assignment.teacher.lastBoardedAt,
                 );
+                const isReminderExpanded =
+                  expandedReminderCampId === assignment.campId;
+                const { onBus, offBus, total } = assignment.bus.studentCounts;
 
                 return (
                   <div
@@ -1126,6 +1213,91 @@ function DashboardContent() {
                               : "ยืนยันขึ้นรถ"}
                         </Button>
                       </div>
+                    </div>
+
+                    <div className="mt-4 border-t border-gray-100 pt-3">
+                      <button
+                        aria-expanded={isReminderExpanded}
+                        className="flex min-h-10 w-full items-center justify-between gap-3 rounded-xl px-2 text-left text-sm font-semibold text-[#3d6357] transition hover:bg-[#f1f6f4]"
+                        disabled={isTraveling || total === 0}
+                        type="button"
+                        onClick={() =>
+                          setExpandedReminderCampId((current) =>
+                            current === assignment.campId
+                              ? null
+                              : assignment.campId,
+                          )
+                        }
+                      >
+                        <span className="flex items-center gap-2">
+                          <BellRing size={16} />
+                          {isTraveling
+                            ? "ส่งเตือนได้เมื่อรถจอด"
+                            : total === 0
+                              ? "ยังไม่มีนักเรียนในรถ"
+                              : "เตือนนักเรียน"}
+                        </span>
+                        {!isTraveling && total > 0 && (
+                          <ChevronDown
+                            className={`transition-transform ${isReminderExpanded ? "rotate-180" : ""}`}
+                            size={16}
+                          />
+                        )}
+                      </button>
+
+                      {isReminderExpanded && !isTraveling && total > 0 && (
+                        <div className="mt-2 grid gap-2 rounded-2xl bg-[#f7faf8] p-3 sm:grid-cols-2">
+                          <button
+                            className="rounded-xl border border-[#cfe0d9] bg-white p-3 text-left transition hover:border-[#5d7c6f] disabled:cursor-not-allowed disabled:opacity-50"
+                            disabled={
+                              offBus === 0 ||
+                              sendingReminderKey !== null ||
+                              recentlySentReminderKeys.includes(
+                                `${assignment.campId}:board`,
+                              )
+                            }
+                            type="button"
+                            onClick={() =>
+                              requestTeacherBusReminder(assignment, "board")
+                            }
+                          >
+                            <span className="block text-sm font-bold text-gray-900">
+                              เตือนให้กดขึ้นรถ
+                            </span>
+                            <span className="mt-1 block text-xs text-gray-500">
+                              {offBus === 0
+                                ? "ขึ้นรถครบแล้ว"
+                                : `ยังไม่ยืนยัน ${offBus} จาก ${total} คน`}
+                            </span>
+                          </button>
+                          <button
+                            className="rounded-xl border border-amber-200 bg-white p-3 text-left transition hover:border-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
+                            disabled={
+                              onBus === 0 ||
+                              sendingReminderKey !== null ||
+                              recentlySentReminderKeys.includes(
+                                `${assignment.campId}:alight`,
+                              )
+                            }
+                            type="button"
+                            onClick={() =>
+                              requestTeacherBusReminder(assignment, "alight")
+                            }
+                          >
+                            <span className="block text-sm font-bold text-gray-900">
+                              เตือนให้กดลงรถ
+                            </span>
+                            <span className="mt-1 block text-xs text-gray-500">
+                              {onBus === 0
+                                ? "ไม่มีคนอยู่บนรถ"
+                                : `อยู่บนรถ ${onBus} จาก ${total} คน`}
+                            </span>
+                          </button>
+                          <p className="text-[11px] leading-relaxed text-gray-500 sm:col-span-2">
+                            ระบบส่งเฉพาะคนที่ยังต้องกด และจำกัดการส่งซ้ำทุก 1 นาที
+                          </p>
+                        </div>
+                      )}
                     </div>
                   </div>
                 );

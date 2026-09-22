@@ -25,6 +25,7 @@ import {
   LogOut,
   RefreshCw,
   ChevronRight,
+  BellRing,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { toast } from "react-hot-toast";
@@ -223,6 +224,7 @@ export default function StudentDashboard() {
                 status: "ON_BUS",
                 isOnBus: true,
                 lastBoardedAt: result.checkedAt || new Date().toISOString(),
+                reminder: null,
               },
             }
             : item,
@@ -280,6 +282,7 @@ export default function StudentDashboard() {
                 ...item.student,
                 status: "OFF_BUS",
                 isOnBus: false,
+                reminder: null,
               },
             }
             : item,
@@ -555,6 +558,7 @@ export default function StudentDashboard() {
                   assignment.student?.participationStatus !== "NOT_TRAVELING";
                 const isTraveling = assignment.bus?.status === "TRAVELING";
                 const position = assignment.student?.position;
+                const reminder = assignment.student?.reminder;
                 const busStatusLabel = !assignment.configured
                   ? "รอจัดรถ"
                   : isTraveling
@@ -631,6 +635,25 @@ export default function StudentDashboard() {
                         </span>
                       </div>
                     </div>
+
+                    {reminder && !isTraveling && (
+                      <div
+                        aria-live="polite"
+                        className={`mt-3 flex items-start gap-2.5 rounded-xl border px-3 py-2.5 ${
+                          reminder.action === "alight"
+                            ? "border-amber-200 bg-amber-50 text-amber-900"
+                            : "border-[#b8d0c8] bg-[#edf6f1] text-[#285343]"
+                        }`}
+                      >
+                        <BellRing className="mt-0.5 shrink-0" size={16} />
+                        <div className="min-w-0">
+                          <p className="text-xs font-bold">ครูประจำรถแจ้งเตือน</p>
+                          <p className="mt-0.5 text-xs leading-relaxed opacity-80">
+                            {reminder.message}
+                          </p>
+                        </div>
+                      </div>
+                    )}
 
                     {/* Bottom Row: Seat Info + Primary Action Button */}
                     <div className="pt-3.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3.5">

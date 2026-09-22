@@ -4,5 +4,11 @@
     "app/api/**": {
       "maxDuration": 60
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/cron/camp-reminders",
+      "schedule": "10 7 * * *"
+    }
+  ]
 }

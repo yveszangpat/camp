@@ -5,13 +5,158 @@ import { requireTeacher } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { activeCampStudentWhere } from "@/lib/active-camp-student";
 
+function isMeaningfulText(value) {
+  return !/^[-–—\s]*$/.test(String(value || "").trim());
+}
+
+function cleanItems(value) {
+  return Array.isArray(value)
+    ? value.map((item) => String(item || "").trim()).filter(isMeaningfulText)
+    : [];
+}
+
+function uniqueItems(items, limit = 8) {
+  return Array.from(new Set(cleanItems(items))).slice(0, limit);
+}
+
+function buildLocalSummary({ allTexts, scaleResults }) {
+  const positivePattern =
+    /(ดี|ดีมาก|ชอบ|สนุก|ประทับใจ|ยอดเยี่ยม|มีประโยชน์|ได้ความรู้|พอใจ|เหมาะสม)/i;
+  const improvementPattern =
+    /(ควร|อยากให้|ปรับปรุง|เพิ่ม|ลด|น้อย|ไม่พอ|ไม่ดี|ช้า|เร็วเกิน|ร้อน|แออัด|ไม่สะดวก|ปัญหา)/i;
+
+  const strengths = uniqueItems(
+    allTexts.filter(
+      (text) => positivePattern.test(text) && !improvementPattern.test(text),
+    ),
+  );
+  const improvements = uniqueItems(
+    allTexts.filter((text) => improvementPattern.test(text)),
+  );
+  const recommendations = uniqueItems(
+    improvements.map((text) =>
+      /^(ควร|อยากให้|เสนอ)/i.test(text)
+        ? text
+        : `ควรพิจารณาปรับปรุงเรื่อง ${text}`,
+    ),
+  );
+
+  const overallAverage = scaleResults.length
+    ? scaleResults.reduce((total, item) => total + item.average, 0) /
+      scaleResults.length
+    : null;
+  const scoreText =
+    overallAverage === null
+      ? ""
+      : ` ผลประเมินแบบคะแนนมีค่าเฉลี่ยรวม ${overallAverage.toFixed(2)} จาก 5 คะแนน`;
+  const overview = `สรุปจากแบบประเมินของผู้เข้าร่วมจำนวน ${allTexts.length} คำตอบปลายเปิด และ ${scaleResults.length} ตัวชี้วัดแบบคะแนน${scoreText}`;
+
+  let continuationReason =
+    "ควรพิจารณาจัดกิจกรรมต่อ โดยนำข้อเสนอแนะของผู้เข้าร่วมไปปรับปรุงการดำเนินงานครั้งถัดไป";
+  if (overallAverage !== null && overallAverage < 3) {
+    continuationReason =
+      "ควรปรับปรุงรูปแบบกิจกรรมตามผลประเมินและข้อเสนอแนะก่อนพิจารณาจัดกิจกรรมต่อ";
+  } else if (overallAverage !== null && overallAverage >= 4) {
+    continuationReason =
+      "ควรจัดกิจกรรมต่อ เนื่องจากผลประเมินโดยรวมอยู่ในระดับดี พร้อมนำข้อเสนอแนะไปพัฒนาให้เหมาะสมยิ่งขึ้น";
+  }
+
+  return {
+    overview,
+    strengths,
+    improvements,
+    recommendations,
+    continuationReason,
+  };
+}
+
+const TRANSIENT_GEMINI_STATUSES = new Set([
+  "UNAVAILABLE",
+  "INTERNAL",
+  "DEADLINE_EXCEEDED",
+]);
+
+function geminiModels() {
+  return Array.from(
+    new Set(
+      [
+        process.env.GEMINI_MODEL,
+        "gemini-flash-lite-latest",
+        "gemini-3.1-flash-lite",
+        "gemini-3.5-flash-lite",
+        "gemini-flash-latest",
+      ].filter(Boolean),
+    ),
+  );
+}
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function requestGemini(promptText, apiKey) {
+  const models = geminiModels();
+  const attempts = [models[0], models[0], ...models.slice(1)];
+  let lastFailure = null;
+
+  for (let index = 0; index < attempts.length; index += 1) {
+    const model = attempts[index];
+
+    if (index === 1) await wait(750);
+
+    try {
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: AbortSignal.timeout(12_000),
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: promptText }] }],
+            generationConfig: { temperature: 0.2 },
+          }),
+        },
+      );
+      const data = await response.json().catch(() => null);
+
+      if (response.ok) return { data, model };
+
+      const status = data?.error?.status || `HTTP_${response.status}`;
+      const message = String(data?.error?.message || "");
+
+      lastFailure = { responseStatus: response.status, status, message, model };
+      console.warn("[surveys/ai-summary] Gemini request failed", {
+        model,
+        responseStatus: response.status,
+        status,
+      });
+
+      const transient =
+        TRANSIENT_GEMINI_STATUSES.has(status) ||
+        [500, 502, 503, 504].includes(response.status);
+
+      if (!transient) return { error: lastFailure };
+    } catch (error) {
+      lastFailure = {
+        responseStatus: 504,
+        status: "DEADLINE_EXCEEDED",
+        message: error instanceof Error ? error.message : String(error),
+        model,
+      };
+      console.warn("[surveys/ai-summary] Gemini request timed out", { model });
+    }
+  }
+
+  return { error: lastFailure };
+}
+
 export async function POST(request) {
   const { teacher, error } = await requireTeacher();
 
   if (error) return error;
 
   try {
-    const { campId } = await request.json();
+    const { campId, force = false } = await request.json();
 
     if (!campId) {
       return NextResponse.json({ error: "กรุณาระบุ campId" }, { status: 400 });
@@ -67,26 +212,50 @@ export async function POST(request) {
         overview: "ไม่มีข้อมูลคำถามแบบประเมินสำหรับค่ายนี้",
         strengths: [],
         improvements: [],
+        recommendations: [],
+        continuationReason: "",
       });
+    }
+
+    if (!force && survey.ai_summary) {
+      return NextResponse.json(survey.ai_summary);
     }
 
     // Extract all text answers regardless of question type
     let allTexts = [];
+    const scaleSummaries = [];
+    const scaleResults = [];
 
     survey.survey_question.forEach((q) => {
+      const scaleValues = q.survey_answer
+        .map((answer) => Number(answer.scale_value))
+        .filter((value) => Number.isFinite(value));
+
+      if (scaleValues.length) {
+        const average =
+          scaleValues.reduce((total, value) => total + value, 0) /
+          scaleValues.length;
+        scaleSummaries.push(
+          `${q.question_text}: ค่าเฉลี่ย ${average.toFixed(2)} จาก ${scaleValues.length} คำตอบ`,
+        );
+        scaleResults.push({ average, count: scaleValues.length });
+      }
+
       q.survey_answer.forEach((a) => {
-        if (a.text_answer && String(a.text_answer).trim() !== "") {
+        if (isMeaningfulText(a.text_answer)) {
           allTexts.push(String(a.text_answer).trim());
         }
       });
     });
 
-    if (allTexts.length === 0) {
+    if (allTexts.length === 0 && scaleSummaries.length === 0) {
       return NextResponse.json({
         overview:
-          "ไม่มีข้อเสนอแนะแบบข้อความจากผู้เข้าร่วมค่าย จึงไม่สามารถสรุปผลด้วย AI ได้ (ลองเช็คว่านักเรียนได้พิมพ์ข้อความมาจริงๆ หรือยังครับ)",
+          "ยังไม่มีคำตอบแบบประเมินจากผู้เข้าร่วม จึงไม่สามารถสรุปผลด้วย AI ได้",
         strengths: [],
         improvements: [],
+        recommendations: [],
+        continuationReason: "",
       });
     }
 
@@ -100,50 +269,119 @@ export async function POST(request) {
 
     const promptText = `
 คุณคือผู้ช่วย AI สำหรับสรุปผลการประเมินค่ายการศึกษา
-กรุณาอ่านข้อเสนอแนะและคำวิจารณ์จากนักเรียนต่อไปนี้ แล้วสรุปผลออกมาเป็น 3 หัวข้อ:
+กรุณาอ่านข้อเสนอแนะและคำวิจารณ์จากนักเรียนต่อไปนี้ แล้วสรุปผลออกมาเป็น 5 หัวข้อ:
 1. ภาพรวม (Overview): สรุปประเด็นหลักสั้นๆ เข้าใจง่าย
 2. สิ่งที่ดี (Strengths): รายการสิ่งที่มีคนชมหรือเห็นว่าเป็นข้อดี
 3. สิ่งที่ควรปรับปรุง (Improvements): รายการสิ่งที่ควรนำไปปรับปรุงแก้ไข
+4. ข้อเสนอแนะและแนวทางปรับปรุง (Recommendations): แปลงสิ่งที่ควรปรับปรุงเป็นข้อเสนอที่ทำได้จริง กระชับ และไม่แต่งข้อมูลเพิ่ม
+5. ความสอดคล้องและเหตุผลที่ควรจัดต่อ (Continuation reason): วิเคราะห์จากข้อมูลว่ากิจกรรมควรจัดต่อหรือไม่ เพราะเหตุใด โดยกล่าวถึงประโยชน์ต่อผู้เรียนและเงื่อนไขที่ควรปรับปรุงอย่างสมดุล
 สรุปออกมาเป็นภาษาไทยที่เข้าใจง่าย
 
 ให้ตอบกลับมาเป็นรูปแบบ JSON เท่านั้น โดยมีโครงสร้างดังนี้:
 {
   "overview": "ข้อความสรุปภาพรวม",
   "strengths": ["ข้อ 1", "ข้อ 2", ...],
-  "improvements": ["ข้อ 1", "ข้อ 2", ...]
+  "improvements": ["ข้อ 1", "ข้อ 2", ...],
+  "recommendations": ["ข้อเสนอข้อ 1", "ข้อเสนอข้อ 2", ...],
+  "continuationReason": "ข้อความวิเคราะห์ว่าควรจัดต่อหรือไม่และเหตุผล"
 }
 
 ห้ามใส่ markdown syntax (\`\`\`json หรือ \`\`\`) ครอบมาเด็ดขาด ให้ปรินต์ออกมาแค่ JSON
 ถ้าข้อเสนอแนะมีน้อยหรือไม่ชัดเจน ให้สรุปเท่าที่ทำได้
 
-ข้อเสนอแนะที่ได้มามีดังนี้:
-${allTexts.map((t) => `- ${t}`).join("\n")}
+ผลคำถามแบบคะแนน:
+${scaleSummaries.length ? scaleSummaries.map((t) => `- ${t}`).join("\n") : "- ไม่มีคำตอบแบบคะแนน"}
+
+คำตอบปลายเปิดจากผู้เข้าร่วม:
+${allTexts.length ? allTexts.map((t) => `- ${t}`).join("\n") : "- ไม่มีคำตอบปลายเปิด ให้เสนอแนวทางจากผลคะแนนเท่าที่มีและระบุอย่างระมัดระวัง"}
     `.trim();
 
-    const geminiResponse = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent?key=${process.env.GEMINI_API_KEY}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: promptText }] }],
-          generationConfig: {
-            temperature: 0.2, // Low temperature for more deterministic/factual summarization
-          },
-        }),
-      },
+    const geminiResult = await requestGemini(
+      promptText,
+      process.env.GEMINI_API_KEY,
     );
 
-    if (!geminiResponse.ok) {
-      //       console.error("Gemini fetch failed:", geminiResponse.status);
+    if (geminiResult.error) {
+      const providerStatus = geminiResult.error.status;
+      const providerMessage = geminiResult.error.message;
+
+      if (
+        providerStatus === "INVALID_ARGUMENT" &&
+        providerMessage.toLowerCase().includes("api key")
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "GEMINI_API_KEY ไม่ถูกต้องหรือถูกยกเลิก กรุณาสร้าง API key ใหม่และอัปเดตไฟล์ .env",
+            code: "INVALID_GEMINI_API_KEY",
+          },
+          { status: 503 },
+        );
+      }
+
+      if (providerStatus === "RESOURCE_EXHAUSTED") {
+        return NextResponse.json(
+          {
+            error:
+              "โควตาการใช้งาน Gemini เต็มชั่วคราว กรุณารอสักครู่หรือตรวจสอบโควตาของโครงการ",
+            code: "GEMINI_QUOTA_EXHAUSTED",
+          },
+          { status: 429 },
+        );
+      }
+
+      if (providerStatus === "PERMISSION_DENIED") {
+        return NextResponse.json(
+          {
+            error:
+              "GEMINI_API_KEY ไม่มีสิทธิ์เรียกใช้งาน Gemini API กรุณาตรวจสอบการเปิดใช้ API และข้อจำกัดของคีย์",
+            code: "GEMINI_PERMISSION_DENIED",
+          },
+          { status: 503 },
+        );
+      }
+
+      if (
+        TRANSIENT_GEMINI_STATUSES.has(providerStatus) ||
+        [500, 502, 503, 504].includes(geminiResult.error.responseStatus)
+      ) {
+        if (survey.ai_summary) {
+          return NextResponse.json({
+            ...survey.ai_summary,
+            cached: true,
+            warning:
+              "Gemini มีผู้ใช้งานสูงชั่วคราว ระบบจึงแสดงผลวิเคราะห์ล่าสุดที่บันทึกไว้",
+          });
+        }
+
+        const localSummary = buildLocalSummary({ allTexts, scaleResults });
+
+        await prisma.survey.update({
+          where: { survey_id: survey.survey_id },
+          data: {
+            ai_summary: localSummary,
+            ai_summary_updated_at: new Date(),
+          },
+        });
+
+        return NextResponse.json({
+          ...localSummary,
+          fallback: true,
+          warning:
+            "Gemini มีผู้ใช้งานสูงชั่วคราว ระบบจึงสรุปจากคำตอบและคะแนนในแบบประเมินโดยตรง",
+        });
+      }
 
       return NextResponse.json(
-        { error: "เกิดข้อผิดพลาดในการติดต่อกับ AI Service" },
+        {
+          error: "เกิดข้อผิดพลาดในการติดต่อกับ AI Service",
+          code: providerStatus || "GEMINI_SERVICE_ERROR",
+        },
         { status: 502 },
       );
     }
 
-    const geminiData = await geminiResponse.json();
+    const geminiData = geminiResult.data;
     const textResponse =
       geminiData.candidates?.[0]?.content?.parts?.[0]?.text || "";
 
@@ -175,13 +413,26 @@ ${allTexts.map((t) => `- ${t}`).join("\n")}
     // Validation
     const safetyCheck = {
       overview: parsedResult.overview || "ไม่มีข้อมูลภาพรวม",
-      strengths: Array.isArray(parsedResult.strengths)
-        ? parsedResult.strengths
-        : [],
-      improvements: Array.isArray(parsedResult.improvements)
-        ? parsedResult.improvements
-        : [],
+      strengths: cleanItems(parsedResult.strengths),
+      improvements: cleanItems(parsedResult.improvements),
+      recommendations: cleanItems(
+        Array.isArray(parsedResult.recommendations)
+          ? parsedResult.recommendations
+          : parsedResult.improvements,
+      ),
+      continuationReason:
+        typeof parsedResult.continuationReason === "string"
+          ? parsedResult.continuationReason.trim()
+          : "",
     };
+
+    await prisma.survey.update({
+      where: { survey_id: survey.survey_id },
+      data: {
+        ai_summary: safetyCheck,
+        ai_summary_updated_at: new Date(),
+      },
+    });
 
     return NextResponse.json(safetyCheck);
   } catch {

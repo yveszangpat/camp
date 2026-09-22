@@ -11,6 +11,30 @@ import { useStatusModal } from "@/components/StatusModalProvider";
 const inputClass =
   "w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-800 outline-none transition focus:border-[#6b857a] focus:ring-2 focus:ring-[#6b857a]/15";
 const labelClass = "mb-1.5 block text-sm font-medium text-gray-700";
+const BUDGET_SOURCE_INCOME = "เงินรายได้สถานศึกษา";
+const BUDGET_SOURCE_SUBSIDY = "เงินอุดหนุน";
+const BUDGET_SOURCE_OTHER = "อื่นๆ (ระบุ)";
+
+function getBudgetSourceOption(value: string | null | undefined) {
+  if (value === BUDGET_SOURCE_INCOME || value === BUDGET_SOURCE_SUBSIDY) {
+    return value;
+  }
+
+  return value ? BUDGET_SOURCE_OTHER : "";
+}
+
+function getCustomBudgetSource(value: string | null | undefined) {
+  if (
+    !value ||
+    value === BUDGET_SOURCE_INCOME ||
+    value === BUDGET_SOURCE_SUBSIDY ||
+    value === BUDGET_SOURCE_OTHER
+  ) {
+    return "";
+  }
+
+  return value;
+}
 
 function SkeletonBlock({ className }: { className: string }) {
   return (
@@ -171,86 +195,6 @@ function StringList({
   );
 }
 
-function ReferenceMultiSelect({
-  title,
-  options,
-  value,
-  onChange,
-}: {
-  title: string;
-  options: any[];
-  value: string;
-  onChange: (value: string) => void;
-}) {
-  const lines = String(value || "")
-    .split("\n")
-    .map((item) => item.trim())
-    .filter(Boolean);
-  const knownLabels = new Set(options.map((option) => option.label));
-  const selected = new Set(lines.filter((item) => knownLabels.has(item)));
-  const customLines = lines.filter((item) => !knownLabels.has(item));
-
-  const merge = (selectedValues: Set<string>, customValue: string) => {
-    const orderedSelected = options
-      .filter((option) => selectedValues.has(option.label))
-      .map((option) => option.label);
-    const custom = customValue
-      .split("\n")
-      .map((item) => item.trim())
-      .filter(Boolean);
-
-    onChange([...orderedSelected, ...custom].join("\n"));
-  };
-
-  return (
-    <div className="rounded-xl border border-gray-200 p-4">
-      <h3 className="mb-3 text-sm font-medium text-gray-800">{title}</h3>
-      {options.length ? (
-        <div className="space-y-2">
-          {options.map((option) => (
-            <label
-              key={option.document_reference_option_id}
-              className="flex cursor-pointer items-start gap-3 rounded-lg p-2 hover:bg-gray-50"
-            >
-              <input
-                checked={selected.has(option.label)}
-                className="mt-1 h-4 w-4 accent-[#5d7c6f]"
-                type="checkbox"
-                onChange={(event) => {
-                  const next = new Set(selected);
-
-                  if (event.target.checked) next.add(option.label);
-                  else next.delete(option.label);
-                  merge(next, customLines.join("\n"));
-                }}
-              />
-              <span className="text-sm leading-6 text-gray-700">
-                {option.label}
-              </span>
-            </label>
-          ))}
-        </div>
-      ) : (
-        <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-700">
-          แอดมินยังไม่ได้เพิ่มตัวเลือกในหมวดนี้
-        </p>
-      )}
-      <label className="mt-4 block">
-        <span className={labelClass}>อื่น ๆ (หนึ่งหัวข้อต่อหนึ่งบรรทัด)</span>
-        <textarea
-          className={`${inputClass} min-h-24 resize-y`}
-          placeholder="กรอกหัวข้ออื่นเพิ่มเติม"
-          value={customLines.join("\n")}
-          onChange={(event) => merge(selected, event.target.value)}
-        />
-      </label>
-      <p className="mt-2 text-xs text-gray-500">
-        เลือกได้หลายรายการ และทุกบรรทัดจะแสดงในเอกสาร PDF
-      </p>
-    </div>
-  );
-}
-
 function ResponsibleSelect({
   value,
   onChange,
@@ -328,7 +272,6 @@ export default function ProjectDocumentPage() {
   const [people, setPeople] = useState<any[]>([]);
   const [teachers, setTeachers] = useState<any[]>([]);
   const [templates, setTemplates] = useState<any[]>([]);
-  const [referenceOptions, setReferenceOptions] = useState<any[]>([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState("");
   const [templateName, setTemplateName] = useState("");
   const [loading, setLoading] = useState(true);
@@ -360,9 +303,6 @@ export default function ProjectDocumentPage() {
       fetch("/api/project-document-templates").then((response) =>
         response.ok ? response.json() : [],
       ),
-      fetch("/api/document-reference-options").then((response) =>
-        response.ok ? response.json() : [],
-      ),
       fetch("/api/teachers").then((response) =>
         response.ok ? response.json() : [],
       ),
@@ -372,15 +312,11 @@ export default function ProjectDocumentPage() {
           documentData,
           personnelData,
           templateData,
-          referenceOptionData,
           teachersData,
         ]) => {
           setDocument(documentData);
           setPeople(Array.isArray(personnelData) ? personnelData : []);
           setTemplates(Array.isArray(templateData) ? templateData : []);
-          setReferenceOptions(
-            Array.isArray(referenceOptionData) ? referenceOptionData : [],
-          );
           setTeachers(
             Array.isArray(teachersData)
               ? teachersData
@@ -723,22 +659,24 @@ export default function ProjectDocumentPage() {
             </Field>
           </div>
           <div className="mt-4 grid gap-4 md:grid-cols-2">
-            <ReferenceMultiSelect
-              options={referenceOptions.filter(
-                (option) => option.category === "STANDARD",
-              )}
-              title="สนองมาตรฐานการศึกษา"
-              value={document.standards || ""}
-              onChange={(value) => update("standards", value)}
-            />
-            <ReferenceMultiSelect
-              options={referenceOptions.filter(
-                (option) => option.category === "STRATEGY",
-              )}
-              title="กลยุทธ์โรงเรียน"
-              value={document.strategy || ""}
-              onChange={(value) => update("strategy", value)}
-            />
+            <Field label="สนองมาตรฐานการศึกษา">
+              <textarea
+                className={`${inputClass} min-h-28 resize-y`}
+                placeholder="พิมพ์มาตรฐานการศึกษาที่โครงการสนอง"
+                value={document.standards || ""}
+                onChange={(event) =>
+                  update("standards", event.target.value)
+                }
+              />
+            </Field>
+            <Field label="กลยุทธ์โรงเรียน">
+              <textarea
+                className={`${inputClass} min-h-28 resize-y`}
+                placeholder="พิมพ์กลยุทธ์โรงเรียนที่เกี่ยวข้อง"
+                value={document.strategy || ""}
+                onChange={(event) => update("strategy", event.target.value)}
+              />
+            </Field>
           </div>
         </Section>
 
@@ -953,16 +891,45 @@ export default function ProjectDocumentPage() {
                 }
               />
             </Field>
-            <Field label="แหล่งงบประมาณ">
-              <input
+            <div>
+              <label className={labelClass} htmlFor="budget-source">
+                แหล่งงบประมาณ
+              </label>
+              <select
                 className={inputClass}
-                placeholder="เช่น เงินอุดหนุน"
-                value={document.budget_source || ""}
+                id="budget-source"
+                value={getBudgetSourceOption(document.budget_source)}
                 onChange={(event) =>
                   update("budget_source", event.target.value)
                 }
-              />
-            </Field>
+              >
+                <option value="">เลือกแหล่งงบประมาณ</option>
+                <option value={BUDGET_SOURCE_INCOME}>
+                  {BUDGET_SOURCE_INCOME}
+                </option>
+                <option value={BUDGET_SOURCE_SUBSIDY}>
+                  {BUDGET_SOURCE_SUBSIDY}
+                </option>
+                <option value={BUDGET_SOURCE_OTHER}>
+                  {BUDGET_SOURCE_OTHER}
+                </option>
+              </select>
+              {getBudgetSourceOption(document.budget_source) ===
+                BUDGET_SOURCE_OTHER && (
+                <input
+                  aria-label="ระบุแหล่งงบประมาณอื่นๆ"
+                  className={`${inputClass} mt-2`}
+                  placeholder="ระบุแหล่งงบประมาณ"
+                  value={getCustomBudgetSource(document.budget_source)}
+                  onChange={(event) =>
+                    update(
+                      "budget_source",
+                      event.target.value || BUDGET_SOURCE_OTHER,
+                    )
+                  }
+                />
+              )}
+            </div>
           </div>
           <h3 className="mb-3 mt-6 font-medium text-gray-800">
             รายการใช้งบประมาณ

@@ -6,6 +6,10 @@ import { requireStudent } from "@/lib/auth";
 import { isBangkokDateBefore } from "@/lib/bangkok-date";
 import { prisma } from "@/lib/db";
 import { checkRateLimit } from "@/lib/rate-limit";
+import {
+  BUS_REMINDER_TTL_MS,
+  getActiveBusReminder,
+} from "@/lib/camp-bus-reminder";
 
 export async function GET(request: Request) {
   const { student, error: authError } = await requireStudent();
@@ -102,6 +106,17 @@ export async function GET(request: Request) {
                 name: true,
                 status: true,
                 floor_count: true,
+                events: {
+                  where: {
+                    event_type: { in: ["REMIND_BOARD", "REMIND_ALIGHT"] },
+                    created_at: {
+                      gte: new Date(Date.now() - BUS_REMINDER_TTL_MS),
+                    },
+                  },
+                  orderBy: { created_at: "desc" },
+                  take: 6,
+                  select: { event_type: true, created_at: true },
+                },
               },
             },
           },
@@ -123,6 +138,8 @@ export async function GET(request: Request) {
           };
         }
 
+        const isOnBus = assignment.status === "ON_BUS";
+
         return {
           campId: enrollment.camp_camp_id,
           campName: enrollment.camp.name,
@@ -135,8 +152,12 @@ export async function GET(request: Request) {
           student: {
             status: assignment.status,
             participationStatus: assignment.participation_status,
-            isOnBus: assignment.status === "ON_BUS",
+            isOnBus,
             lastBoardedAt: assignment.last_boarded_at,
+            reminder:
+              assignment.participation_status === "ACTIVE"
+                ? getActiveBusReminder(assignment.bus.events, isOnBus)
+                : null,
             position: assignment.position
               ? {
                   label: assignment.position.label,

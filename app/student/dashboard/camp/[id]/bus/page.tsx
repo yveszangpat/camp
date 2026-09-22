@@ -13,6 +13,7 @@ import {
   LogOut,
   MapPin,
   RefreshCw,
+  BellRing,
 } from "lucide-react";
 import { toast } from "react-hot-toast";
 
@@ -137,6 +138,10 @@ export default function StudentBusCheckinPage() {
                   result.lastBoardedAt !== undefined
                     ? result.lastBoardedAt
                     : current.student.lastBoardedAt,
+                reminder:
+                  result.reminder !== undefined
+                    ? result.reminder
+                    : current.student.reminder,
               },
             };
           });
@@ -222,6 +227,7 @@ export default function StudentBusCheckinPage() {
           isOnBus: true,
           status: "ON_BUS",
           lastBoardedAt: result.checkedAt || current.student.lastBoardedAt,
+          reminder: null,
         },
       }));
       setPendingBoarding(false);
@@ -262,6 +268,7 @@ export default function StudentBusCheckinPage() {
           ...current.student,
           isOnBus: false,
           status: "OFF_BUS",
+          reminder: null,
         },
       }));
       toast.success(result.message || "บันทึกว่าลงจากรถแล้ว");
@@ -333,6 +340,7 @@ export default function StudentBusCheckinPage() {
   const isTraveling = data.bus?.status === "TRAVELING";
   const hasSeat = Boolean(data.student?.position);
   const floors = data.bus?.floors || [];
+  const reminder = data.student?.reminder;
 
   return (
     <div className="min-h-screen bg-[#f5f5f2] pb-12">
@@ -410,6 +418,37 @@ export default function StudentBusCheckinPage() {
             </span>
           </div>
         </section>
+
+        {reminder && !isTraveling && (
+          <section
+            aria-live="assertive"
+            className={`rounded-2xl border p-4 shadow-sm ${
+              reminder.action === "alight"
+                ? "border-amber-300 bg-amber-50"
+                : "border-[#9fc4b5] bg-[#eaf5ef]"
+            }`}
+          >
+            <div className="flex items-start gap-3">
+              <div
+                className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${
+                  reminder.action === "alight"
+                    ? "bg-amber-200 text-amber-800"
+                    : "bg-[#cce6d9] text-[#285343]"
+                }`}
+              >
+                <BellRing size={20} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-bold text-gray-900">
+                  ครูประจำรถแจ้งเตือน
+                </p>
+                <p className="mt-1 text-xs leading-relaxed text-gray-600">
+                  {reminder.message}
+                </p>
+              </div>
+            </div>
+          </section>
+        )}
 
         <section className="sticky top-0 z-10 -mx-1 rounded-2xl border border-[#d8e5de] bg-[#f7faf8]/95 p-3 shadow-sm backdrop-blur">
           <div className="flex items-center justify-between gap-3">

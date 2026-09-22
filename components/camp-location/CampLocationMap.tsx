@@ -9,6 +9,22 @@ export interface MapPoint {
   longitude: number;
 }
 
+function mapErrorMessage(error: unknown) {
+  const message = error instanceof Error ? error.message : "";
+  const normalized = message.toLowerCase();
+
+  if (
+    normalized.includes("authentication") ||
+    normalized.includes("api key") ||
+    normalized.includes("referer") ||
+    normalized.includes("billing")
+  ) {
+    return "Google Maps ยังไม่อนุญาตโดเมนนี้ กรุณาตรวจสอบ API key และรายการโดเมนที่อนุญาต";
+  }
+
+  return message || "ไม่สามารถโหลด Google Maps ได้";
+}
+
 interface CampLocationMapProps {
   destination: (MapPoint & { name: string; address?: string | null }) | null;
   students: Array<MapPoint & { studentId: number; name: string }>;
@@ -45,6 +61,16 @@ export default function CampLocationMap({
 
   useEffect(() => {
     let cancelled = false;
+    const mapsWindow = window as Window & { gm_authFailure?: () => void };
+    const handleAuthFailure = () => {
+      if (!cancelled) {
+        setError(
+          "Google Maps ยังไม่อนุญาตโดเมนนี้ กรุณาตรวจสอบ API key และรายการโดเมนที่อนุญาต",
+        );
+      }
+    };
+
+    mapsWindow.gm_authFailure = handleAuthFailure;
 
     async function initialize() {
       try {
@@ -64,11 +90,7 @@ export default function CampLocationMap({
         });
         setReady(true);
       } catch (mapError) {
-        setError(
-          mapError instanceof Error
-            ? mapError.message
-            : "ไม่สามารถโหลด Google Maps ได้",
-        );
+        if (!cancelled) setError(mapErrorMessage(mapError));
       }
     }
 
@@ -93,143 +115,147 @@ export default function CampLocationMap({
 
     if (!ready || !map || !libraries) return;
 
-    const pathPositions = path.map((point) => ({
-      lat: point.latitude,
-      lng: point.longitude,
-    }));
+    try {
+      const pathPositions = path.map((point) => ({
+        lat: point.latitude,
+        lng: point.longitude,
+      }));
 
-    if (!historyPolylineRef.current) {
-      historyPolylineRef.current = new libraries.maps.Polyline({
-        map,
-        path: pathPositions,
-        strokeColor: "#2563eb",
-        strokeOpacity: 0.85,
-        strokeWeight: 5,
-      });
-    } else {
-      historyPolylineRef.current.setPath(pathPositions);
-    }
-
-    const routePositions = routePath.map((point) => ({
-      lat: point.latitude,
-      lng: point.longitude,
-    }));
-
-    if (!routePolylineRef.current) {
-      routePolylineRef.current = new libraries.maps.Polyline({
-        map,
-        path: routePositions,
-        strokeColor: "#16a34a",
-        strokeOpacity: 0.95,
-        strokeWeight: 6,
-        zIndex: 2,
-      });
-    } else {
-      routePolylineRef.current.setPath(routePositions);
-    }
-
-    if (destination) {
-      const position = {
-        lat: destination.latitude,
-        lng: destination.longitude,
-      };
-
-      if (!destinationMarkerRef.current) {
-        const pin = new libraries.marker.PinElement({
-          background: "#00a77b",
-          borderColor: "#ffffff",
-          glyphColor: "#ffffff",
-          glyphText: "⌾",
-          scale: 1.15,
+      if (!historyPolylineRef.current) {
+        historyPolylineRef.current = new libraries.maps.Polyline({
+          map,
+          path: pathPositions,
+          strokeColor: "#2563eb",
+          strokeOpacity: 0.85,
+          strokeWeight: 5,
         });
+      } else {
+        historyPolylineRef.current.setPath(pathPositions);
+      }
 
-        destinationMarkerRef.current =
-          new libraries.marker.AdvancedMarkerElement({
+      const routePositions = routePath.map((point) => ({
+        lat: point.latitude,
+        lng: point.longitude,
+      }));
+
+      if (!routePolylineRef.current) {
+        routePolylineRef.current = new libraries.maps.Polyline({
+          map,
+          path: routePositions,
+          strokeColor: "#16a34a",
+          strokeOpacity: 0.95,
+          strokeWeight: 6,
+          zIndex: 2,
+        });
+      } else {
+        routePolylineRef.current.setPath(routePositions);
+      }
+
+      if (destination) {
+        const position = {
+          lat: destination.latitude,
+          lng: destination.longitude,
+        };
+
+        if (!destinationMarkerRef.current) {
+          const pin = new libraries.marker.PinElement({
+            background: "#00a77b",
+            borderColor: "#ffffff",
+            glyphColor: "#ffffff",
+            glyphText: "⌾",
+            scale: 1.15,
+          });
+
+          destinationMarkerRef.current =
+            new libraries.marker.AdvancedMarkerElement({
+              map,
+              position,
+              title: destination.name,
+              content: pin,
+            });
+        } else {
+          destinationMarkerRef.current.position = position;
+          destinationMarkerRef.current.title = destination.name;
+          destinationMarkerRef.current.map = map;
+        }
+      } else if (destinationMarkerRef.current) {
+        destinationMarkerRef.current.map = null;
+      }
+
+      const visibleStudentIds = new Set(
+        students.map(({ studentId }) => studentId),
+      );
+
+      studentMarkersRef.current.forEach((marker, studentId) => {
+        if (!visibleStudentIds.has(studentId)) {
+          marker.map = null;
+          studentMarkersRef.current.delete(studentId);
+        }
+      });
+
+      students.forEach((student) => {
+        const position = {
+          lat: student.latitude,
+          lng: student.longitude,
+        };
+        const existingMarker = studentMarkersRef.current.get(student.studentId);
+
+        if (!existingMarker) {
+          const pin = new libraries.marker.PinElement({
+            background: "#2563eb",
+            borderColor: "#ffffff",
+            glyphColor: "#ffffff",
+            glyphText: student.name.trim().charAt(0) || "●",
+            scale: 1.05,
+          });
+
+          const marker = new libraries.marker.AdvancedMarkerElement({
             map,
             position,
-            title: destination.name,
+            title: student.name,
             content: pin,
           });
-      } else {
-        destinationMarkerRef.current.position = position;
-        destinationMarkerRef.current.title = destination.name;
-        destinationMarkerRef.current.map = map;
+
+          studentMarkersRef.current.set(student.studentId, marker);
+        } else {
+          existingMarker.position = position;
+          existingMarker.title = student.name;
+          existingMarker.map = map;
+        }
+      });
+
+      const visiblePoints = [
+        ...pathPositions,
+        ...routePositions,
+        ...students.map((student) => ({
+          lat: student.latitude,
+          lng: student.longitude,
+        })),
+        ...(destination
+          ? [{ lat: destination.latitude, lng: destination.longitude }]
+          : []),
+      ];
+      const viewportSignature = visiblePoints
+        .map(({ lat, lng }) => `${lat.toFixed(6)},${lng.toFixed(6)}`)
+        .join("|");
+
+      // รักษามุมมองที่ผู้ใช้เลื่อนหรือซูมไว้ เมื่อเป็นเพียงการ render/poll
+      // ข้อมูลเดิม และจัดกรอบใหม่เฉพาะเมื่อพิกัดบนแผนที่เปลี่ยนจริง
+      if (viewportSignature !== viewportSignatureRef.current) {
+        viewportSignatureRef.current = viewportSignature;
+
+        if (visiblePoints.length === 1) {
+          map.setCenter(visiblePoints[0]);
+          map.setZoom(15);
+        } else if (visiblePoints.length > 1) {
+          const bounds = new libraries.core.LatLngBounds();
+
+          visiblePoints.forEach((point) => bounds.extend(point));
+          map.fitBounds(bounds, 32);
+        }
       }
-    } else if (destinationMarkerRef.current) {
-      destinationMarkerRef.current.map = null;
-    }
-
-    const visibleStudentIds = new Set(
-      students.map(({ studentId }) => studentId),
-    );
-
-    studentMarkersRef.current.forEach((marker, studentId) => {
-      if (!visibleStudentIds.has(studentId)) {
-        marker.map = null;
-        studentMarkersRef.current.delete(studentId);
-      }
-    });
-
-    students.forEach((student) => {
-      const position = {
-        lat: student.latitude,
-        lng: student.longitude,
-      };
-      const existingMarker = studentMarkersRef.current.get(student.studentId);
-
-      if (!existingMarker) {
-        const pin = new libraries.marker.PinElement({
-          background: "#2563eb",
-          borderColor: "#ffffff",
-          glyphColor: "#ffffff",
-          glyphText: student.name.trim().charAt(0) || "●",
-          scale: 1.05,
-        });
-
-        const marker = new libraries.marker.AdvancedMarkerElement({
-          map,
-          position,
-          title: student.name,
-          content: pin,
-        });
-
-        studentMarkersRef.current.set(student.studentId, marker);
-      } else {
-        existingMarker.position = position;
-        existingMarker.title = student.name;
-        existingMarker.map = map;
-      }
-    });
-
-    const visiblePoints = [
-      ...pathPositions,
-      ...routePositions,
-      ...students.map((student) => ({
-        lat: student.latitude,
-        lng: student.longitude,
-      })),
-      ...(destination
-        ? [{ lat: destination.latitude, lng: destination.longitude }]
-        : []),
-    ];
-    const viewportSignature = visiblePoints
-      .map(({ lat, lng }) => `${lat.toFixed(6)},${lng.toFixed(6)}`)
-      .join("|");
-
-    // รักษามุมมองที่ผู้ใช้เลื่อนหรือซูมไว้ เมื่อเป็นเพียงการ render/poll
-    // ข้อมูลเดิม และจัดกรอบใหม่เฉพาะเมื่อพิกัดบนแผนที่เปลี่ยนจริง
-    if (viewportSignature !== viewportSignatureRef.current) {
-      viewportSignatureRef.current = viewportSignature;
-
-      if (visiblePoints.length === 1) {
-        map.setCenter(visiblePoints[0]);
-        map.setZoom(15);
-      } else if (visiblePoints.length > 1) {
-        const bounds = new libraries.core.LatLngBounds();
-
-        visiblePoints.forEach((point) => bounds.extend(point));
-        map.fitBounds(bounds, 32);
-      }
+    } catch (mapError) {
+      setError(mapErrorMessage(mapError));
     }
   }, [destination, path, ready, routePath, students]);
 
@@ -241,17 +267,21 @@ export default function CampLocationMap({
 
     if (!ready || !map || !editable || !onMapClick) return;
 
-    clickListenerRef.current = map.addListener(
-      "click",
-      (event: google.maps.MapMouseEvent) => {
-        if (!event.latLng) return;
+    try {
+      clickListenerRef.current = map.addListener(
+        "click",
+        (event: google.maps.MapMouseEvent) => {
+          if (!event.latLng) return;
 
-        onMapClick({
-          latitude: event.latLng.lat(),
-          longitude: event.latLng.lng(),
-        });
-      },
-    );
+          onMapClick({
+            latitude: event.latLng.lat(),
+            longitude: event.latLng.lng(),
+          });
+        },
+      );
+    } catch (mapError) {
+      setError(mapErrorMessage(mapError));
+    }
 
     return () => {
       clickListenerRef.current?.remove();

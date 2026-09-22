@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { requireTeacher } from "@/lib/auth";
 import { isBangkokDateBefore } from "@/lib/bangkok-date";
+import { BUS_REMINDER_COOLDOWN_MS } from "@/lib/camp-bus-reminder";
 import { prisma } from "@/lib/db";
 import { checkRateLimit } from "@/lib/rate-limit";
 
@@ -80,6 +81,21 @@ export async function GET(request: Request) {
             registration_plate: true,
             status: true,
             floor_count: true,
+            assignments: {
+              where: { participation_status: "ACTIVE" },
+              select: { status: true },
+            },
+            events: {
+              where: {
+                event_type: { in: ["REMIND_BOARD", "REMIND_ALIGHT"] },
+                created_at: {
+                  gte: new Date(Date.now() - BUS_REMINDER_COOLDOWN_MS),
+                },
+              },
+              orderBy: { created_at: "desc" },
+              take: 2,
+              select: { event_type: true, created_at: true },
+            },
           },
         },
       },
@@ -99,6 +115,20 @@ export async function GET(request: Request) {
           registrationPlate: assignment.bus.registration_plate,
           status: assignment.bus.status,
           floorCount: assignment.bus.floor_count,
+          studentCounts: {
+            total: assignment.bus.assignments.length,
+            onBus: assignment.bus.assignments.filter(
+              (student) => student.status === "ON_BUS",
+            ).length,
+            offBus: assignment.bus.assignments.filter(
+              (student) => student.status === "OFF_BUS",
+            ).length,
+          },
+          reminders: assignment.bus.events.map((event) => ({
+            action:
+              event.event_type === "REMIND_BOARD" ? "board" : "alight",
+            sentAt: event.created_at,
+          })),
         },
         teacher: {
           status: assignment.status,

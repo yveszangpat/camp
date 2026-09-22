@@ -114,7 +114,6 @@ const campMenuItems: SidebarMenuItem[] = [
     icon: FileText,
     group: "เอกสาร",
     access: "owner",
-    disabled: true,
   },
   {
     id: "survey",
@@ -146,6 +145,7 @@ function getCampIdFromPath(pathname: string) {
 function getCampMenuId(pathname: string, requestedMenu: string | null) {
   if (requestedMenu) return requestedMenu;
   if (pathname.includes("/students")) return "students";
+  if (pathname.includes("/project-summary-document")) return "summary-documents";
   if (pathname.includes("/project-document")) return "documents";
   if (pathname.includes("/location")) return "location";
   if (pathname.includes("/attendance")) return "attendance";
@@ -405,12 +405,15 @@ function TeacherSidebar({
       survey: "survey",
       compare: "score-comparison",
       certificate: "certificate",
+      "summary-documents": "project-summary-document",
     };
 
     if (id === "students") {
       router.push(`${campPath}/students`);
     } else if (id === "documents") {
       router.push(`${campPath}/project-document`);
+    } else if (id === "summary-documents") {
+      router.push(`${campPath}/project-summary-document`);
     } else if (id === "overview") {
       router.push(campPath);
     } else if (campPageRoutes[id]) {
@@ -516,12 +519,15 @@ function MobileSidebar({
       survey: "survey",
       compare: "score-comparison",
       certificate: "certificate",
+      "summary-documents": "project-summary-document",
     };
 
     if (id === "students") {
       router.push(`${campPath}/students`);
     } else if (id === "documents") {
       router.push(`${campPath}/project-document`);
+    } else if (id === "summary-documents") {
+      router.push(`${campPath}/project-summary-document`);
     } else if (id === "overview") {
       router.push(campPath);
     } else if (campPageRoutes[id]) {

@@ -34,6 +34,8 @@ import {
   UserRound,
   Users,
   Venus,
+  BellRing,
+  ChevronDown,
 } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 
@@ -793,7 +795,7 @@ export default function BusManagementModal({
   campName,
   pageMode = false,
 }: BusManagementModalProps) {
-  const { showError, showSuccess } = useStatusModal();
+  const { showError, showSuccess, showConfirm } = useStatusModal();
   const [classrooms, setClassrooms] = useState<Classroom[]>([]);
   const [buses, setBuses] = useState<Bus[]>([]);
   const [publishedLayoutTemplates, setPublishedLayoutTemplates] = useState<
@@ -840,6 +842,12 @@ export default function BusManagementModal({
     useState(false);
   const [changingTeacherAssignmentId, setChangingTeacherAssignmentId] =
     useState<number | null>(null);
+  const [showReminderOptions, setShowReminderOptions] = useState(false);
+  const [sendingReminderAction, setSendingReminderAction] = useState<
+    "board" | "alight" | null
+  >(null);
+  const [recentlySentReminderActions, setRecentlySentReminderActions] =
+    useState<Array<"board" | "alight">>([]);
   const [showCreate, setShowCreate] = useState(false);
   const [showEditBus, setShowEditBus] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -1908,6 +1916,58 @@ export default function BusManagementModal({
     }
   };
 
+  const sendStudentBusReminder = async (action: "board" | "alight") => {
+    if (!selectedBus || sendingReminderAction !== null) return;
+
+    try {
+      setSendingReminderAction(action);
+      const response = await fetch(
+        `/api/teacher/camps/${campId}/bus/remind`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action, busId: selectedBus.busId }),
+        },
+      );
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "ส่งการเตือนไม่สำเร็จ");
+      }
+
+      setRecentlySentReminderActions((current) => [
+        ...current.filter((item) => item !== action),
+        action,
+      ]);
+      window.setTimeout(() => {
+        setRecentlySentReminderActions((current) =>
+          current.filter((item) => item !== action),
+        );
+      }, 60_000);
+      showSuccess("ส่งการเตือนแล้ว", data.message);
+      await fetchBuses(selectedBus.busId);
+    } catch (error: any) {
+      showError(
+        "ส่งการเตือนไม่สำเร็จ",
+        error.message || "กรุณาลองใหม่อีกครั้ง",
+      );
+    } finally {
+      setSendingReminderAction(null);
+    }
+  };
+
+  const requestStudentBusReminder = (action: "board" | "alight") => {
+    const count = action === "board" ? busStudentCounts.off : busStudentCounts.on;
+    const actionLabel = action === "board" ? "ขึ้นรถ" : "ลงรถ";
+
+    showConfirm(
+      `เตือนให้นักเรียนกด${actionLabel}`,
+      `ระบบจะแจ้งเฉพาะนักเรียน ${count} คนที่ยังไม่ได้กด${actionLabel} การแจ้งเตือนจะแสดงเป็นเวลา 30 นาที`,
+      () => void sendStudentBusReminder(action),
+      `ส่งเตือน ${count} คน`,
+    );
+  };
+
   const availableClassrooms = classrooms;
   const activePositionAssignmentId = selectedPositionId
     ? Object.entries(draftAssignments).find(
@@ -2138,6 +2198,8 @@ export default function BusManagementModal({
   useEffect(() => {
     setBusStudentSearch("");
     setBusStudentStatusFilter("all");
+    setShowReminderOptions(false);
+    setRecentlySentReminderActions([]);
   }, [selectedBusId]);
 
   const moveToSeat = (direction: -1 | 1) => {
@@ -2735,6 +2797,82 @@ export default function BusManagementModal({
                               : "ยืนยันว่าขึ้นรถ"}
                         </Button>
                       </div>
+                    </div>
+                  )}
+
+                  {selectedBus.permissions.canOperate && (
+                    <div className="rounded-2xl border border-[#cfe0d6] bg-white p-4 shadow-sm">
+                      <Button
+                        aria-expanded={showReminderOptions}
+                        className="min-h-11 w-full justify-between bg-[#f1f7f4] px-4 font-semibold text-[#365f4f]"
+                        endContent={
+                          <ChevronDown
+                            className={`transition-transform ${showReminderOptions ? "rotate-180" : ""}`}
+                            size={17}
+                          />
+                        }
+                        isDisabled={
+                          selectedBus.status === "TRAVELING" ||
+                          busStudentCounts.on + busStudentCounts.off === 0
+                        }
+                        startContent={<BellRing size={17} />}
+                        onPress={() =>
+                          setShowReminderOptions((current) => !current)
+                        }
+                      >
+                        {selectedBus.status === "TRAVELING"
+                          ? "ส่งเตือนได้เมื่อรถจอด"
+                          : "เตือนนักเรียนให้กดขึ้น–ลงรถ"}
+                      </Button>
+
+                      {showReminderOptions &&
+                        selectedBus.status === "PARKED" && (
+                          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                            <button
+                              className="rounded-xl border border-[#cfe0d6] bg-[#f7faf8] p-3 text-left transition hover:border-[#6b857a] disabled:cursor-not-allowed disabled:opacity-50"
+                              disabled={
+                                busStudentCounts.off === 0 ||
+                                sendingReminderAction !== null ||
+                                recentlySentReminderActions.includes("board")
+                              }
+                              type="button"
+                              onClick={() => requestStudentBusReminder("board")}
+                            >
+                              <span className="block text-sm font-bold text-gray-900">
+                                เตือนให้กดขึ้นรถ
+                              </span>
+                              <span className="mt-1 block text-xs text-gray-500">
+                                {busStudentCounts.off === 0
+                                  ? "นักเรียนขึ้นรถครบแล้ว"
+                                  : `ยังไม่ยืนยัน ${busStudentCounts.off} คน`}
+                              </span>
+                            </button>
+                            <button
+                              className="rounded-xl border border-amber-200 bg-amber-50/60 p-3 text-left transition hover:border-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
+                              disabled={
+                                busStudentCounts.on === 0 ||
+                                sendingReminderAction !== null ||
+                                recentlySentReminderActions.includes("alight")
+                              }
+                              type="button"
+                              onClick={() =>
+                                requestStudentBusReminder("alight")
+                              }
+                            >
+                              <span className="block text-sm font-bold text-gray-900">
+                                เตือนให้กดลงรถ
+                              </span>
+                              <span className="mt-1 block text-xs text-gray-500">
+                                {busStudentCounts.on === 0
+                                  ? "ไม่มีนักเรียนอยู่บนรถ"
+                                  : `ยังอยู่บนรถ ${busStudentCounts.on} คน`}
+                              </span>
+                            </button>
+                            <p className="text-[11px] leading-relaxed text-gray-500 sm:col-span-2">
+                              แจ้งเฉพาะนักเรียนที่ยังต้องกด และส่งซ้ำได้ทุก 1 นาที
+                            </p>
+                          </div>
+                        )}
                     </div>
                   )}
 

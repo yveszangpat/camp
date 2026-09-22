@@ -1,5 +1,62 @@
 # Next.js & HeroUI Template
 
+## Camp reminder emails with Resend
+
+The production app sends two transactional reminders. Seven days before a
+camp, eligible students who have not joined yet receive an invitation. Three
+days before the camp, confirmed students and camp staff receive a preparation
+reminder. The job reads the existing Prisma roster, so multiple camps starting
+on the same date are handled together and a recipient can receive a separate
+message for each camp.
+
+Create a Resend API key and verify the sender domain before enabling the Cron
+job. The two responsive Thai email templates are rendered by the application,
+so no hosted template IDs are required.
+
+Set these production environment variables:
+
+```env
+RESEND_API_KEY=re_your_resend_api_key
+RESEND_FROM_EMAIL=camp@your-domain.example
+RESEND_FROM_NAME=KKS Camp
+RESEND_DAILY_SEND_LIMIT=90
+CAMP_APP_URL=https://your-production-domain.example
+CRON_SECRET=your_random_vercel_cron_secret
+```
+
+Resend Free allows 100 sends per day; the default `RESEND_DAILY_SEND_LIMIT=90`
+leaves room for other transactional messages in the same account. If a day has
+more recipients than the limit, the durable queue continues on the next Cron
+run. The limit is stored by Bangkok calendar date in the database, so repeated
+or manually triggered runs cannot each consume another 90 messages. A
+short-lived database lock also prevents overlapping Cron executions.
+
+The daily job reconciles every camp starting within the next seven days, rather
+than relying on one exact run. This means a missed Cron invocation is caught up:
+unenrolled students receive the join reminder while the camp is D-7 through
+D-1, and enrolled students plus camp staff receive the starting reminder while
+the camp is D-3 through D-1. Queue uniqueness prevents the same reminder from
+being sent twice, including when multiple camps start on the same day.
+
+Definite Resend rejections are retried up to three times. A network timeout or
+other result where Resend may already have accepted the batch is stored as
+`UNKNOWN` and is deliberately not retried automatically; inspect those rows in
+`camp_email_reminder` before deciding whether to resend. Rows that reach the
+retry ceiling are stored as `EXHAUSTED`. Pending recipient names and email
+addresses are refreshed from the current roster before sending.
+
+Deploy the Prisma migration before the application deployment:
+
+```bash
+npm run db:migrate:deploy
+npm run test:camp-reminders
+npm run build
+```
+
+Vercel invokes `/api/cron/camp-reminders` once per day at 07:10 UTC (14:10 in
+Thailand). The endpoint requires the `CRON_SECRET` bearer token and is not
+intended to be called from the browser.
+
 ## Camp location tracking
 
 The camp tracking screen uses Google Maps JavaScript API, Places API (New),

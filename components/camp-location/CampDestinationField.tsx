@@ -3,20 +3,12 @@
 import type { FormEvent } from "react";
 import type { MapPoint } from "./CampLocationMap";
 
-import dynamic from "next/dynamic";
 import { MapPin, Search } from "lucide-react";
 import { useCallback, useState } from "react";
 
-import { searchGooglePlaces } from "@/lib/google-maps-client";
+import CampLocationMap from "./CampLocationMap";
 
-const CampLocationMap = dynamic(() => import("./CampLocationMap"), {
-  ssr: false,
-  loading: () => (
-    <div className="flex h-full items-center justify-center bg-slate-100 text-sm text-slate-400">
-      กำลังโหลดแผนที่...
-    </div>
-  ),
-});
+import { searchGooglePlaces } from "@/lib/google-maps-client";
 
 export interface CampDestination extends MapPoint {
   name: string;
